@@ -1,6 +1,6 @@
     (() => {
       const canvas = document.getElementById("pong");
-      const ctx = canvas.getContext("2d");
+      const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true }) || canvas.getContext("2d");
 
       const pointsLabel = document.getElementById("pointsLabel");
       const missesLabel = document.getElementById("missesLabel");
@@ -25,6 +25,11 @@
 
       const musicToggle = document.getElementById("musicToggle");
       const musicVolume = document.getElementById("musicVolume");
+      const sfxToggle = document.getElementById("sfxToggle");
+      const sfxVolume = document.getElementById("sfxVolume");
+      const audioToggle = document.getElementById("audioToggle");
+      const masterVolume = document.getElementById("masterVolume");
+      const autoGraphicsToggle = document.getElementById("autoGraphicsToggle");
       const perfToggle = document.getElementById("perfToggle");
       const ultraPerfToggle = document.getElementById("ultraPerfToggle");
       const aiToggle = document.getElementById("aiToggle");
@@ -76,8 +81,13 @@
         settings: {
           aiEnabled: true,
           pointerAssist: true,
+          audioEnabled: true,
+          masterVolume: 0.8,
           musicEnabled: true,
           musicVolume: 0.35,
+          sfxEnabled: true,
+          sfxVolume: 0.8,
+          autoGraphics: true,
           performanceMode: false,
           ultraPerformanceMode: false,
           gameMode: "classic"
@@ -208,6 +218,35 @@
           lagDetected: false,
           lagHoldUntil: 0,
           frameId: 0,
+          dynamicDprScale: 1,
+          fpsRecoverUntil: 0,
+          fpsDegradeUntil: 0,
+          autoPerfCooldownUntil: 0,
+          hudNextSyncAt: 0,
+          hudCache: {
+            pointsLabel: "",
+            missesLabel: "",
+            streakLabel: "",
+            pointsValue: "",
+            missesValue: "",
+            streakValue: "",
+            modeBadge: "",
+            eventValue: "",
+            eventColor: "",
+            prismLeftHeight: "",
+            prismRightHeight: "",
+            prismLeftText: "",
+            prismRightText: "",
+            prismRightLabel: "",
+            leftOverexpose: false,
+            rightOverexpose: false,
+            leftShatter: false,
+            rightShatter: false
+          },
+          compatibility: {
+            isSafariLike: false,
+            autoPerfApplied: false
+          },
           vfxLimiter: {
             budgetFrameId: -1,
             generalBudget: 0,
@@ -278,7 +317,7 @@
       };
 
       const FLICK_ANIM_MS = 180;
-      const MAX_VFX_PARTICLES = 280;
+      const MAX_VFX_PARTICLES = 220;
       const MAX_VFX_SHOCKWAVES = 36;
 
       let lastFrame = performance.now();
@@ -289,6 +328,27 @@
 
       function rand(min, max) {
         return min + Math.random() * (max - min);
+      }
+
+      function detectCompatibilityProfile() {
+        const ua = navigator.userAgent || "";
+        const vendor = navigator.vendor || "";
+        const hasChrome = ua.includes("Chrome") || ua.includes("CriOS") || ua.includes("Chromium") || ua.includes("Edg/");
+        const hasSafariSignature = ua.includes("Version/") && ua.includes("Safari/");
+        const isSafariLike = ((ua.includes("Safari") && vendor.includes("Apple") && !hasChrome) || (hasSafariSignature && !hasChrome));
+
+        state.runtime.compatibility.isSafariLike = isSafariLike;
+
+        if (!state.settings.autoGraphics) {
+          state.runtime.compatibility.autoPerfApplied = false;
+          return;
+        }
+
+        if (isSafariLike && !state.runtime.compatibility.autoPerfApplied) {
+          state.runtime.compatibility.autoPerfApplied = true;
+          state.settings.performanceMode = true;
+          state.settings.ultraPerformanceMode = false;
+        }
       }
 
       function getModeConfig() {
@@ -526,6 +586,29 @@
         }
 
         runtime.lagDetected = now < runtime.lagHoldUntil;
+
+        if (runtime.frameMsEMA > 24) {
+          if (now > runtime.fpsDegradeUntil) {
+            runtime.fpsDegradeUntil = now + 1100;
+            runtime.dynamicDprScale = Math.max(0.72, runtime.dynamicDprScale - 0.08);
+            resize();
+          }
+        } else if (runtime.frameMsEMA < 17.4 && !runtime.lagDetected) {
+          if (now > runtime.fpsRecoverUntil) {
+            runtime.fpsRecoverUntil = now + 2800;
+            runtime.dynamicDprScale = Math.min(1, runtime.dynamicDprScale + 0.04);
+            resize();
+          }
+        }
+
+        if (state.settings.autoGraphics && runtime.frameMsEMA > 31 && !state.settings.performanceMode && now > runtime.autoPerfCooldownUntil) {
+          runtime.autoPerfCooldownUntil = now + 9000;
+          state.settings.performanceMode = true;
+          state.settings.ultraPerformanceMode = false;
+          syncSettingsUi();
+          resize();
+          showToast("Auto graphics enabled Performance mode for smoother FPS");
+        }
       }
 
       function getPerformanceTier() {
@@ -543,16 +626,20 @@
         let density = 1;
 
         if (tier === 2) {
-          density = 0.24;
+          density = 0.2;
         } else if (tier === 1) {
-          density = 0.4;
+          density = 0.32;
+        }
+
+        if (state.runtime.compatibility.isSafariLike) {
+          density *= 0.74;
         }
 
         if (state.runtime.lagDetected) {
-          density *= 0.35;
+          density *= 0.3;
         }
 
-        return Math.max(0.08, density);
+        return Math.max(0.06, density);
       }
 
       function getTrailLimit() {
@@ -575,11 +662,12 @@
       function getVfxCaps() {
         const tier = getPerformanceTier();
         const lag = state.runtime.lagDetected;
+        const safariLike = state.runtime.compatibility.isSafariLike;
 
         return {
-          particle: lag ? 60 : (tier === 2 ? 82 : tier === 1 ? 118 : MAX_VFX_PARTICLES),
-          shockwave: lag ? 6 : (tier === 2 ? 0 : tier === 1 ? 8 : MAX_VFX_SHOCKWAVES),
-          flickArrow: lag ? 5 : (tier === 2 ? 0 : tier === 1 ? 8 : 22)
+          particle: lag ? 42 : (tier === 2 ? 68 : tier === 1 ? 98 : (safariLike ? 150 : MAX_VFX_PARTICLES)),
+          shockwave: lag ? 4 : (tier === 2 ? 0 : tier === 1 ? 6 : (safariLike ? 18 : MAX_VFX_SHOCKWAVES)),
+          flickArrow: lag ? 4 : (tier === 2 ? 0 : tier === 1 ? 6 : (safariLike ? 14 : 22))
         };
       }
 
@@ -1000,77 +1088,166 @@
       function syncPrismMeters() {
         const left = state.prism.left;
         const right = state.prism.right;
+        const cache = state.runtime.hudCache;
 
         const leftPct = clamp((left.value / PRISM_METER_MAX) * 100, 0, 100);
         const rightPct = clamp((right.value / PRISM_METER_MAX) * 100, 0, 100);
 
-        prismMeterLeftFill.style.height = leftPct + "%";
-        prismMeterRightFill.style.height = rightPct + "%";
-
-        prismRightLabel.textContent = state.settings.aiEnabled ? "AI" : "P2";
-
-        prismLeft.classList.toggle("overexpose", left.overexposeTimer > 0);
-        prismRight.classList.toggle("overexpose", right.overexposeTimer > 0);
-        prismLeft.classList.toggle("shatter", left.shatterTimer > 0);
-        prismRight.classList.toggle("shatter", right.shatterTimer > 0);
-
-        prismMeterLeftText.textContent = left.overexposeTimer > 0
-          ? "x" + getPrismScoreMultiplier("left").toFixed(2)
-          : Math.round(leftPct) + "%";
-
-        prismMeterRightText.textContent = right.overexposeTimer > 0
-          ? "x" + getPrismScoreMultiplier("right").toFixed(2)
-          : Math.round(rightPct) + "%";
-      }
-
-      function syncHud() {
-        const mode = getModeConfig();
-
-        if (state.settings.aiEnabled) {
-          pointsLabel.textContent = "Points";
-          missesLabel.textContent = "Misses";
-          streakLabel.textContent = "Streak";
-          pointsValue.textContent = String(state.score.points);
-          missesValue.textContent = String(state.score.misses);
-          streakValue.textContent = String(state.score.streak);
-        } else {
-          pointsLabel.textContent = "Player 1";
-          missesLabel.textContent = "Player 2";
-          streakLabel.textContent = "Rally";
-          pointsValue.textContent = String(state.score.player1);
-          missesValue.textContent = String(state.score.player2);
-          streakValue.textContent = String(state.score.streak);
+        const leftHeight = leftPct.toFixed(1) + "%";
+        const rightHeight = rightPct.toFixed(1) + "%";
+        if (cache.prismLeftHeight !== leftHeight) {
+          cache.prismLeftHeight = leftHeight;
+          prismMeterLeftFill.style.height = leftHeight;
+        }
+        if (cache.prismRightHeight !== rightHeight) {
+          cache.prismRightHeight = rightHeight;
+          prismMeterRightFill.style.height = rightHeight;
         }
 
-        modeBadge.textContent = mode.label + " • Opponent: " + (state.settings.aiEnabled ? "AI" : "Player 2");
+        const rightLabel = state.settings.aiEnabled ? "AI" : "P2";
+        if (cache.prismRightLabel !== rightLabel) {
+          cache.prismRightLabel = rightLabel;
+          prismRightLabel.textContent = rightLabel;
+        }
+
+        const leftOver = left.overexposeTimer > 0;
+        const rightOver = right.overexposeTimer > 0;
+        const leftShatter = left.shatterTimer > 0;
+        const rightShatter = right.shatterTimer > 0;
+
+        if (cache.leftOverexpose !== leftOver) {
+          cache.leftOverexpose = leftOver;
+          prismLeft.classList.toggle("overexpose", leftOver);
+        }
+        if (cache.rightOverexpose !== rightOver) {
+          cache.rightOverexpose = rightOver;
+          prismRight.classList.toggle("overexpose", rightOver);
+        }
+        if (cache.leftShatter !== leftShatter) {
+          cache.leftShatter = leftShatter;
+          prismLeft.classList.toggle("shatter", leftShatter);
+        }
+        if (cache.rightShatter !== rightShatter) {
+          cache.rightShatter = rightShatter;
+          prismRight.classList.toggle("shatter", rightShatter);
+        }
+
+        const leftText = leftOver ? "x" + getPrismScoreMultiplier("left").toFixed(2) : Math.round(leftPct) + "%";
+        const rightText = rightOver ? "x" + getPrismScoreMultiplier("right").toFixed(2) : Math.round(rightPct) + "%";
+
+        if (cache.prismLeftText !== leftText) {
+          cache.prismLeftText = leftText;
+          prismMeterLeftText.textContent = leftText;
+        }
+        if (cache.prismRightText !== rightText) {
+          cache.prismRightText = rightText;
+          prismMeterRightText.textContent = rightText;
+        }
+      }
+
+      function syncHud(now = performance.now(), force = false) {
+        const runtime = state.runtime;
+        if (!force && now < runtime.hudNextSyncAt) {
+          return;
+        }
+        runtime.hudNextSyncAt = now + 110;
+
+        const cache = runtime.hudCache;
+        const mode = getModeConfig();
+
+        let nextPointsLabel;
+        let nextMissesLabel;
+        let nextStreakLabel;
+        let nextPointsValue;
+        let nextMissesValue;
+        let nextStreakValue;
+
+        if (state.settings.aiEnabled) {
+          nextPointsLabel = "Points";
+          nextMissesLabel = "Misses";
+          nextStreakLabel = "Streak";
+          nextPointsValue = String(state.score.points);
+          nextMissesValue = String(state.score.misses);
+          nextStreakValue = String(state.score.streak);
+        } else {
+          nextPointsLabel = "Player 1";
+          nextMissesLabel = "Player 2";
+          nextStreakLabel = "Rally";
+          nextPointsValue = String(state.score.player1);
+          nextMissesValue = String(state.score.player2);
+          nextStreakValue = String(state.score.streak);
+        }
+
+        if (cache.pointsLabel !== nextPointsLabel) {
+          cache.pointsLabel = nextPointsLabel;
+          pointsLabel.textContent = nextPointsLabel;
+        }
+        if (cache.missesLabel !== nextMissesLabel) {
+          cache.missesLabel = nextMissesLabel;
+          missesLabel.textContent = nextMissesLabel;
+        }
+        if (cache.streakLabel !== nextStreakLabel) {
+          cache.streakLabel = nextStreakLabel;
+          streakLabel.textContent = nextStreakLabel;
+        }
+        if (cache.pointsValue !== nextPointsValue) {
+          cache.pointsValue = nextPointsValue;
+          pointsValue.textContent = nextPointsValue;
+        }
+        if (cache.missesValue !== nextMissesValue) {
+          cache.missesValue = nextMissesValue;
+          missesValue.textContent = nextMissesValue;
+        }
+        if (cache.streakValue !== nextStreakValue) {
+          cache.streakValue = nextStreakValue;
+          streakValue.textContent = nextStreakValue;
+        }
+
+        const nextModeBadge = mode.label + " • Opponent: " + (state.settings.aiEnabled ? "AI" : "Player 2");
+        if (cache.modeBadge !== nextModeBadge) {
+          cache.modeBadge = nextModeBadge;
+          modeBadge.textContent = nextModeBadge;
+        }
+
         syncPrismMeters();
+
+        let nextEventText;
+        let nextEventColor;
 
         if (!state.events.active) {
           if (mode.survival) {
-            eventValue.textContent = "Survival " + formatTimeMs(state.survival.elapsedMs) + " • Lv " + (state.survival.level + 1);
-            eventValue.style.color = "#ffe7a2";
+            nextEventText = "Survival " + formatTimeMs(state.survival.elapsedMs) + " • Lv " + (state.survival.level + 1);
+            nextEventColor = "#ffe7a2";
           } else if (!mode.eventsEnabled) {
-            eventValue.textContent = "Duel Mode: events off";
-            eventValue.style.color = "#c9dcff";
+            nextEventText = "Duel Mode: events off";
+            nextEventColor = "#c9dcff";
           } else {
-            eventValue.textContent = "None active";
-            eventValue.style.color = "var(--text-main)";
+            nextEventText = "None active";
+            nextEventColor = "var(--text-main)";
           }
-          return;
+        } else {
+          const refNow = state.paused && state.pauseStartedAt ? state.pauseStartedAt : now;
+          const remaining = Math.max(0, (state.events.endsAt - refNow) / 1000);
+          nextEventText = eventCatalog[state.events.active].label + " (" + remaining.toFixed(1) + "s)";
+
+          if (state.events.rainbow) {
+            nextEventColor = hslColor(state.hue % 360, 100, 72);
+          } else if (state.events.freeze) {
+            nextEventColor = "#9ad8ff";
+          } else if (state.events.sticky) {
+            nextEventColor = "#8ff9d7";
+          } else {
+            nextEventColor = "#ffd6a6";
+          }
         }
 
-        const now = state.paused && state.pauseStartedAt ? state.pauseStartedAt : performance.now();
-        const remaining = Math.max(0, (state.events.endsAt - now) / 1000);
-        eventValue.textContent = eventCatalog[state.events.active].label + " (" + remaining.toFixed(1) + "s)";
-
-        if (state.events.rainbow) {
-          eventValue.style.color = hslColor(state.hue % 360, 100, 72);
-        } else if (state.events.freeze) {
-          eventValue.style.color = "#9ad8ff";
-        } else if (state.events.sticky) {
-          eventValue.style.color = "#8ff9d7";
-        } else {
-          eventValue.style.color = "#ffd6a6";
+        if (cache.eventValue !== nextEventText) {
+          cache.eventValue = nextEventText;
+          eventValue.textContent = nextEventText;
+        }
+        if (cache.eventColor !== nextEventColor) {
+          cache.eventColor = nextEventColor;
+          eventValue.style.color = nextEventColor;
         }
       }
 
@@ -1382,17 +1559,20 @@
 
         state.ball.radius = state.ball.baseRadius;
         respawnBall(Math.random() > 0.5 ? 1 : -1);
-        syncHud();
+        state.runtime.hudNextSyncAt = 0;
+        syncHud(performance.now(), true);
         showToast("Match reset");
       }
 
       function resize() {
         const tier = getPerformanceTier();
-        const dprCap = tier === 2 ? 1 : tier === 1 ? 1.35 : 2;
+        const safariLike = state.runtime.compatibility.isSafariLike;
+        const baseCap = tier === 2 ? 1 : tier === 1 ? 1.28 : (safariLike ? 1.45 : 1.75);
+        const dprCap = baseCap * state.runtime.dynamicDprScale;
         const dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, dprCap));
         const bounds = canvas.getBoundingClientRect();
-        const width = Math.round(bounds.width);
-        const height = Math.round(bounds.height);
+        const width = Math.max(1, Math.round(bounds.width));
+        const height = Math.max(1, Math.round(bounds.height));
 
         canvas.width = Math.round(width * dpr);
         canvas.height = Math.round(height * dpr);
@@ -2224,7 +2404,7 @@
       }
 
       function unlockAudio() {
-        if (!state.settings.musicEnabled) {
+        if (!state.settings.audioEnabled) {
           return;
         }
 
@@ -2243,8 +2423,16 @@
         state.audio.unlocked = true;
       }
 
-      function playTone(freq, duration, type, gainAmount) {
-        if (!state.audio.unlocked || !state.audio.ctx || !state.settings.musicEnabled) {
+      function playTone(freq, duration, type, gainAmount, channel = "sfx") {
+        if (!state.audio.unlocked || !state.audio.ctx || !state.settings.audioEnabled) {
+          return;
+        }
+
+        if (channel === "music" && !state.settings.musicEnabled) {
+          return;
+        }
+
+        if (channel === "sfx" && !state.settings.sfxEnabled) {
           return;
         }
 
@@ -2262,7 +2450,8 @@
         const now = ctxAudio.currentTime;
 
         const perfAudioScale = tier === 2 ? 0.45 : tier === 1 ? 0.72 : 1;
-        const volume = clamp(state.settings.musicVolume * perfAudioScale, 0, 1);
+        const channelVolume = channel === "music" ? state.settings.musicVolume : state.settings.sfxVolume;
+        const volume = clamp(state.settings.masterVolume * channelVolume * perfAudioScale, 0, 1);
         const peak = gainAmount * volume;
 
         osc.type = type;
@@ -2280,7 +2469,7 @@
       }
 
       function playSfx(kind) {
-        if (!state.settings.musicEnabled) {
+        if (!state.settings.audioEnabled || !state.settings.sfxEnabled) {
           return;
         }
 
@@ -2405,7 +2594,7 @@
       }
 
       function updateMusic(now) {
-        if (state.paused || !state.settings.musicEnabled || !state.audio.unlocked) {
+        if (state.paused || !state.settings.audioEnabled || !state.settings.musicEnabled || !state.audio.unlocked) {
           return;
         }
 
@@ -2421,9 +2610,9 @@
         const sequence = [196, 246.94, 293.66, 369.99, 293.66, 246.94];
         const freq = sequence[state.audio.beatStep % sequence.length];
 
-        playTone(freq, 0.24, "triangle", 0.11);
+        playTone(freq, 0.24, "triangle", 0.11, "music");
         if (state.audio.beatStep % 2 === 0 && tier === 0) {
-          playTone(freq * 0.5, 0.18, "sine", 0.055);
+          playTone(freq * 0.5, 0.18, "sine", 0.055, "music");
         }
 
         state.audio.beatStep += 1;
@@ -2533,20 +2722,32 @@
           showToast("Mode: " + getModeConfig().label);
         }
 
-        syncHud();
+        state.runtime.hudNextSyncAt = 0;
+        syncHud(performance.now(), true);
       }
 
       function syncSettingsUi() {
         aiToggle.checked = state.settings.aiEnabled;
         manualBlock.classList.toggle("active", !state.settings.aiEnabled);
+        autoGraphicsToggle.checked = state.settings.autoGraphics;
+        audioToggle.checked = state.settings.audioEnabled;
+        masterVolume.value = String(state.settings.masterVolume);
         musicToggle.checked = state.settings.musicEnabled;
         musicVolume.value = String(state.settings.musicVolume);
+        sfxToggle.checked = state.settings.sfxEnabled;
+        sfxVolume.value = String(state.settings.sfxVolume);
         perfToggle.checked = state.settings.performanceMode;
         ultraPerfToggle.checked = state.settings.ultraPerformanceMode;
         pointerAssistToggle.checked = state.settings.pointerAssist;
         gameModeSelect.value = state.settings.gameMode;
+        masterVolume.disabled = !state.settings.audioEnabled;
+        musicToggle.disabled = !state.settings.audioEnabled;
+        musicVolume.disabled = !state.settings.audioEnabled || !state.settings.musicEnabled;
+        sfxToggle.disabled = !state.settings.audioEnabled;
+        sfxVolume.disabled = !state.settings.audioEnabled || !state.settings.sfxEnabled;
         document.body.classList.toggle("perf-mode", state.settings.performanceMode);
         document.body.classList.toggle("ultra-perf", state.settings.ultraPerformanceMode);
+        document.body.classList.toggle("compat-mode", state.runtime.compatibility.isSafariLike);
       }
 
       function tick(now) {
@@ -2566,12 +2767,12 @@
           updateBall(dt);
           updateEffects(dt);
           updateMusic(now);
-          if (state.settings.performanceMode || state.runtime.lagDetected) {
+          if (state.settings.performanceMode || state.runtime.lagDetected || state.runtime.compatibility.isSafariLike) {
             trimEffectsForPerformance();
           }
         }
 
-        syncHud();
+        syncHud(now);
         render();
         requestAnimationFrame(tick);
       }
@@ -2762,8 +2963,27 @@
         state.input.p2Up = false;
         state.input.p2Down = false;
         manualBlock.classList.toggle("active", !state.settings.aiEnabled);
-        syncHud();
+        state.runtime.hudNextSyncAt = 0;
+        syncHud(performance.now(), true);
         showToast(state.settings.aiEnabled ? "AI opponent enabled" : "Local 2-player enabled");
+      });
+
+      autoGraphicsToggle.addEventListener("change", () => {
+        state.settings.autoGraphics = autoGraphicsToggle.checked;
+        if (!state.settings.autoGraphics) {
+          state.runtime.compatibility.autoPerfApplied = false;
+        } else {
+          detectCompatibilityProfile();
+          if (state.runtime.compatibility.isSafariLike && state.settings.performanceMode) {
+            showToast("Auto graphics enabled for this browser profile");
+            syncSettingsUi();
+            resize();
+            trimEffectsForPerformance();
+            return;
+          }
+        }
+        syncSettingsUi();
+        showToast(state.settings.autoGraphics ? "Auto graphics enabled" : "Auto graphics disabled");
       });
 
       pointerAssistToggle.addEventListener("change", () => {
@@ -2774,18 +2994,47 @@
         }
       });
 
+      audioToggle.addEventListener("change", () => {
+        state.settings.audioEnabled = audioToggle.checked;
+        if (state.settings.audioEnabled) {
+          unlockAudio();
+          showToast("Audio enabled");
+        } else {
+          showToast("Audio muted");
+        }
+        syncSettingsUi();
+      });
+
+      masterVolume.addEventListener("input", () => {
+        state.settings.masterVolume = Number(masterVolume.value);
+      });
+
       musicToggle.addEventListener("change", () => {
         state.settings.musicEnabled = musicToggle.checked;
-        if (state.settings.musicEnabled) {
+        if (state.settings.musicEnabled && state.settings.audioEnabled) {
           unlockAudio();
-          showToast("Music enabled");
+          showToast("Background music enabled");
         } else {
-          showToast("Music disabled");
+          showToast("Background music disabled");
         }
+        syncSettingsUi();
       });
 
       musicVolume.addEventListener("input", () => {
         state.settings.musicVolume = Number(musicVolume.value);
+      });
+
+      sfxToggle.addEventListener("change", () => {
+        state.settings.sfxEnabled = sfxToggle.checked;
+        if (state.settings.sfxEnabled && state.settings.audioEnabled) {
+          unlockAudio();
+        }
+        syncSettingsUi();
+        showToast(state.settings.sfxEnabled ? "Sound effects enabled" : "Sound effects disabled");
+      });
+
+      sfxVolume.addEventListener("input", () => {
+        state.settings.sfxVolume = Number(sfxVolume.value);
       });
 
       gameModeSelect.addEventListener("change", () => {
@@ -2814,10 +3063,11 @@
         showToast(state.settings.ultraPerformanceMode ? "Ultra performance enabled" : "Ultra performance disabled");
       });
 
+      detectCompatibilityProfile();
+      syncSettingsUi();
       resize();
       setGameMode(state.settings.gameMode, false);
-      syncSettingsUi();
-      activateTab("musicTab");
+      activateTab("graphicsTab");
       resetMatch();
       requestAnimationFrame(tick);
     })();

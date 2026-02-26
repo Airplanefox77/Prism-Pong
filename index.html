@@ -50,12 +50,13 @@
 
           <div id="settingsPanel" class="settings-panel">
             <div class="settings-tabs" role="tablist" aria-label="Settings tabs">
-              <button class="tab-btn active" data-tab-target="musicTab" type="button" role="tab">Music</button>
-              <button class="tab-btn" data-tab-target="p1Tab" type="button" role="tab">Player 1</button>
-              <button class="tab-btn" data-tab-target="p2Tab" type="button" role="tab">Player 2</button>
+              <button class="tab-btn active" data-tab-target="graphicsTab" type="button" role="tab">Graphics</button>
+              <button class="tab-btn" data-tab-target="audioTab" type="button" role="tab">Audio</button>
+              <button class="tab-btn" data-tab-target="controlsTab" type="button" role="tab">Controls</button>
+              <button class="tab-btn" data-tab-target="helpTab" type="button" role="tab">Help</button>
             </div>
 
-            <section class="tab-panel active" id="musicTab" role="tabpanel">
+            <section class="tab-panel active" id="graphicsTab" role="tabpanel">
               <label class="setting-line" for="gameModeSelect">
                 <span>Game Mode</span>
                 <select id="gameModeSelect" class="select-input">
@@ -66,14 +67,11 @@
                 </select>
               </label>
               <p class="setting-note">Classic: balanced events. Chaos: faster events. Duel: no random events. Survival: speed ramps every 10s.</p>
-              <label class="setting-line" for="musicToggle">
-                <span>Music Enabled</span>
-                <input id="musicToggle" class="toggle" type="checkbox" checked />
+              <label class="setting-line" for="autoGraphicsToggle">
+                <span>Auto Graphics</span>
+                <input id="autoGraphicsToggle" class="toggle" type="checkbox" checked />
               </label>
-              <label class="setting-line" for="musicVolume">
-                <span>Music Volume</span>
-                <input id="musicVolume" class="slider" type="range" min="0" max="1" step="0.01" value="0.35" />
-              </label>
+              <p class="setting-note">When on, Prism Pong can auto-enable lower graphics during heavy lag for smoother FPS.</p>
               <label class="setting-line" for="perfToggle">
                 <span>Performance Mode</span>
                 <input id="perfToggle" class="toggle" type="checkbox" />
@@ -85,8 +83,35 @@
               <p class="setting-note">Performance mode reduces VFX density and graphics cost. Ultra mode cuts effects further for max FPS.</p>
             </section>
 
-            <section class="tab-panel" id="p1Tab" role="tabpanel">
-              <p class="setting-note">Move with <strong>W/S</strong>, mouse, or touch drag. Flick controls for directional shots and 4-key combos:</p>
+            <section class="tab-panel" id="audioTab" role="tabpanel">
+              <label class="setting-line" for="audioToggle">
+                <span>Master Audio</span>
+                <input id="audioToggle" class="toggle" type="checkbox" checked />
+              </label>
+              <label class="setting-line" for="masterVolume">
+                <span>Master Volume</span>
+                <input id="masterVolume" class="slider" type="range" min="0" max="1" step="0.01" value="0.8" />
+              </label>
+              <label class="setting-line" for="musicToggle">
+                <span>Background Music</span>
+                <input id="musicToggle" class="toggle" type="checkbox" checked />
+              </label>
+              <label class="setting-line" for="musicVolume">
+                <span>Music Volume</span>
+                <input id="musicVolume" class="slider" type="range" min="0" max="1" step="0.01" value="0.35" />
+              </label>
+              <label class="setting-line" for="sfxToggle">
+                <span>Sound Effects</span>
+                <input id="sfxToggle" class="toggle" type="checkbox" checked />
+              </label>
+              <label class="setting-line" for="sfxVolume">
+                <span>SFX Volume</span>
+                <input id="sfxVolume" class="slider" type="range" min="0" max="1" step="0.01" value="0.8" />
+              </label>
+            </section>
+
+            <section class="tab-panel" id="controlsTab" role="tabpanel">
+              <p class="setting-note">Move P1 with <strong>W/S</strong>, mouse, or touch drag. Flick controls for directional shots and 4-key combos:</p>
               <div class="key-grid">
                 <div class="key-row">
                   <span id="keyA" class="key-chip">A</span>
@@ -101,14 +126,11 @@
                 <span>Mouse/Touch Assist</span>
                 <input id="pointerAssistToggle" class="toggle" type="checkbox" checked />
               </label>
-            </section>
-
-            <section class="tab-panel" id="p2Tab" role="tabpanel">
               <label class="setting-line" for="aiToggle">
                 <span>AI Opponent Enabled</span>
                 <input id="aiToggle" class="toggle" type="checkbox" checked />
               </label>
-              <p class="setting-note">Disable AI for local 2-player mode. Player 2 then uses Arrow Up/Down to move.</p>
+              <p class="setting-note">Disable AI for local 2-player mode. Player 2 uses Arrow Up/Down + Left/Right flicks.</p>
 
               <div id="manualBlock" class="manual-block">
                 <div class="key-grid">
@@ -127,6 +149,34 @@
                   </div>
                 </div>
               </div>
+            </section>
+
+            <section class="tab-panel" id="helpTab" role="tabpanel">
+              <article class="help-block">
+                <h3>Quick Start</h3>
+                <p>Return the ball to build streak and prism charge. In AI mode you score by beating the right paddle; misses increase when the AI scores on you.</p>
+              </article>
+              <article class="help-block">
+                <h3>Combos</h3>
+                <p>Input 4-key combos within the combo window to prime special shots:</p>
+                <div class="key-grid">
+                  <div class="key-row"><span class="key-chip">A D D A</span><span>Prism Zigzag</span></div>
+                  <div class="key-row"><span class="key-chip">A D D D</span><span>Down Burst</span></div>
+                  <div class="key-row"><span class="key-chip">D A A A</span><span>Up Burst</span></div>
+                </div>
+              </article>
+              <article class="help-block">
+                <h3>Prism Meter</h3>
+                <p>Returns fill your meter. Higher meter adds shot power and score multiplier. At 100% you enter Overexpose Mode for stronger bonuses until it fades.</p>
+              </article>
+              <article class="help-block">
+                <h3>Random Events</h3>
+                <p>Large Ball, Rainbow Ball, Freeze Ball, and Sticky Ball can change tempo and scoring. Duel mode disables random events.</p>
+              </article>
+              <article class="help-block">
+                <h3>Pause & Modes</h3>
+                <p>Press <strong>Esc</strong> or <strong>P</strong> to open pause. Use Game Mode in Graphics to swap between Classic, Chaos, Duel, and Light Survival.</p>
+              </article>
             </section>
 
             <button id="settingsBackBtn" class="ghost-btn" type="button">Back</button>
@@ -153,7 +203,6 @@
       </div>
 
     <section class="toolbar">
-      <p class="hint">P1: W/S + A/D flick + combos (ADDA, ADDD, DAAA). P2: arrows when AI off + Left/Right flick. Esc opens pause menu.</p>
       <div class="toolbar-right">
         <span id="modeBadge" class="mode-badge">Opponent: AI</span>
         <button id="resetBtn" type="button">Reset Match</button>
