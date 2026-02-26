@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Prism Pong</title>
+    <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="orb orb-1"></div>
+  <div class="orb orb-2"></div>
+
+  <main class="shell">
+    <section class="hud">
+      <article class="stat">
+        <span class="label">Points</span>
+        <strong class="value" id="pointsValue">0</strong>
+      </article>
+      <article class="stat">
+        <span class="label">Misses</span>
+        <strong class="value" id="missesValue">0</strong>
+      </article>
+      <article class="stat">
+        <span class="label">Streak</span>
+        <strong class="value" id="streakValue">0</strong>
+      </article>
+      <article class="stat">
+        <span class="label">Event</span>
+        <strong class="value" id="eventValue">None active</strong>
+      </article>
+    </section>
+
+    <section class="board-wrap">
+      <canvas id="pong" aria-label="Prism Pong Game"></canvas>
+      <div id="eventToast" class="toast"></div>
+
+      <div id="pauseLayer" class="pause-layer" aria-hidden="true">
+        <section class="pause-card" role="dialog" aria-modal="true" aria-labelledby="pauseTitle">
+          <header class="pause-head">
+            <h2 id="pauseTitle" class="pause-title">Paused</h2>
+            <button id="closePauseBtn" class="ghost-btn" type="button">Resume</button>
+          </header>
+
+          <div id="pauseMain" class="menu-stack">
+            <button id="pauseResumeBtn" class="menu-btn" type="button">Resume Game</button>
+            <button id="pauseSettingsBtn" class="menu-btn" type="button">Settings</button>
+            <button id="pauseRestartBtn" class="menu-btn" type="button">Restart Match</button>
+          </div>
+
+          <div id="settingsPanel" class="settings-panel">
+            <div class="settings-tabs" role="tablist" aria-label="Settings tabs">
+              <button class="tab-btn active" data-tab-target="musicTab" type="button" role="tab">Music</button>
+              <button class="tab-btn" data-tab-target="p1Tab" type="button" role="tab">Player 1</button>
+              <button class="tab-btn" data-tab-target="p2Tab" type="button" role="tab">Player 2</button>
+            </div>
+
+            <section class="tab-panel active" id="musicTab" role="tabpanel">
+              <label class="setting-line" for="musicToggle">
+                <span>Music Enabled</span>
+                <input id="musicToggle" class="toggle" type="checkbox" checked />
+              </label>
+              <label class="setting-line" for="musicVolume">
+                <span>Music Volume</span>
+                <input id="musicVolume" class="slider" type="range" min="0" max="1" step="0.01" value="0.35" />
+              </label>
+              <label class="setting-line" for="perfToggle">
+                <span>Performance Mode</span>
+                <input id="perfToggle" class="toggle" type="checkbox" />
+              </label>
+              <label class="setting-line" for="ultraPerfToggle">
+                <span>Ultra Performance</span>
+                <input id="ultraPerfToggle" class="toggle" type="checkbox" />
+              </label>
+              <p class="setting-note">Performance mode reduces VFX density and graphics cost. Ultra mode cuts effects further for max FPS.</p>
+            </section>
+
+            <section class="tab-panel" id="p1Tab" role="tabpanel">
+              <p class="setting-note">Move with <strong>W/S</strong>, mouse, or touch drag. Flick controls for directional shots and 4-key combos:</p>
+              <div class="key-grid">
+                <div class="key-row">
+                  <span id="keyA" class="key-chip">A</span>
+                  <span>Down smash: sends ball down fast</span>
+                </div>
+                <div class="key-row">
+                  <span id="keyD" class="key-chip">D</span>
+                  <span>Up smash: sends ball up fast</span>
+                </div>
+              </div>
+              <label class="setting-line" for="pointerAssistToggle">
+                <span>Mouse/Touch Assist</span>
+                <input id="pointerAssistToggle" class="toggle" type="checkbox" checked />
+              </label>
+            </section>
+
+            <section class="tab-panel" id="p2Tab" role="tabpanel">
+              <label class="setting-line" for="aiToggle">
+                <span>AI Opponent Enabled</span>
+                <input id="aiToggle" class="toggle" type="checkbox" checked />
+              </label>
+              <p class="setting-note">Disable AI for local 2-player mode. Player 2 then uses Arrow Up/Down to move.</p>
+
+              <div id="manualBlock" class="manual-block">
+                <div class="key-grid">
+                  <div class="key-row">
+                    <span class="key-chip">UP</span>
+                    <span class="key-chip">DOWN</span>
+                    <span>Move paddle</span>
+                  </div>
+                  <div class="key-row">
+                    <span id="keyLeft" class="key-chip">LEFT</span>
+                    <span>Up smash for player 2</span>
+                  </div>
+                  <div class="key-row">
+                    <span id="keyRight" class="key-chip">RIGHT</span>
+                    <span>Down smash for player 2</span>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <button id="settingsBackBtn" class="ghost-btn" type="button">Back</button>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section class="toolbar">
+      <p class="hint">P1: W/S + A/D flick + combos (ADDA, ADDD, DAAA). P2: arrows when AI off + Left/Right flick. Esc opens pause menu.</p>
+      <div class="toolbar-right">
+        <span id="modeBadge" class="mode-badge">Opponent: AI</span>
+        <button id="resetBtn" type="button">Reset Match</button>
+      </div>
+    </section>
+  </main>
+
+    <script src="game.js"></script>
+</body>
+</html>
