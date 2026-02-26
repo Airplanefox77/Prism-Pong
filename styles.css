@@ -469,10 +469,85 @@ button:hover,
   font-size: 0.86rem;
 }
 
+.slider-inline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.inline-value {
+  min-width: 52px;
+  text-align: right;
+  font-size: 0.8rem;
+  color: #dff3ff;
+}
+
 .setting-note {
   color: #c9d7ee;
   font-size: 0.8rem;
   line-height: 1.4;
+}
+
+.score-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.score-block {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  background: rgba(9, 22, 40, 0.46);
+  padding: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.score-block h3 {
+  font-size: 0.87rem;
+  color: #eff7ff;
+}
+
+.score-list {
+  margin: 0;
+  display: grid;
+  gap: 6px;
+  max-height: 190px;
+  overflow-y: auto;
+  padding-right: 3px;
+}
+
+ul.score-list {
+  list-style: none;
+  padding-left: 0;
+}
+
+ol.score-list {
+  padding-left: 20px;
+}
+
+.score-list li {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(15, 31, 57, 0.54);
+  padding: 6px 8px;
+  color: #dceaff;
+  font-size: 0.77rem;
+  line-height: 1.35;
+}
+
+.score-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.score-mode {
+  color: #b8d1f2;
+  font-size: 0.71rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .help-block {
@@ -725,6 +800,10 @@ body.ultra-perf .pause-layer .menu-btn {
 
   .pause-card {
     padding: 14px;
+  }
+
+  .score-columns {
+    grid-template-columns: 1fr;
   }
 
   .prism-meter {

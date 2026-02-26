@@ -23,6 +23,10 @@
       const closePauseBtn = document.getElementById("closePauseBtn");
       const settingsBackBtn = document.getElementById("settingsBackBtn");
 
+      const aiDifficulty = document.getElementById("aiDifficulty");
+      const aiDifficultyValue = document.getElementById("aiDifficultyValue");
+      const recentScoreList = document.getElementById("recentScoreList");
+      const topScoreList = document.getElementById("topScoreList");
       const musicToggle = document.getElementById("musicToggle");
       const musicVolume = document.getElementById("musicVolume");
       const sfxToggle = document.getElementById("sfxToggle");
@@ -51,6 +55,7 @@
       const flickKeyMap = {
         p1Down: document.getElementById("keyA"),
         p1Up: document.getElementById("keyD"),
+        p1Overexpose: document.getElementById("keyE"),
         p2Up: document.getElementById("keyLeft"),
         p2Down: document.getElementById("keyRight")
       };
@@ -59,8 +64,12 @@
       const COMBO_BUFFER_MS = 3400;
       const PERFECT_FLICK_WINDOW_MS = 200;
       const PRISM_METER_MAX = 100;
-      const PRISM_OVEREXPOSE_MS = 7000;
+      const PRISM_OVEREXPOSE_MS = 4500;
       const FREEZE_SLOW_FACTOR = 0.25;
+      const SCORE_LOG_STORAGE_KEY = "prismPong.scoreLog.v1";
+      const SCORE_LOG_RECENT_TTL_MS = 20 * 60 * 1000;
+      const SCORE_LOG_TOP_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+      const SCORE_LOG_TOP_MAX = 10;
 
       const state = {
         width: 960,
@@ -88,6 +97,7 @@
           sfxEnabled: true,
           sfxVolume: 0.8,
           autoGraphics: true,
+          aiDifficulty: 6,
           performanceMode: false,
           ultraPerformanceMode: false,
           gameMode: "classic"
@@ -133,7 +143,9 @@
           lastY: 220,
           flickTimer: 0,
           flickDir: 0,
-          actionCooldownUntil: 0
+          actionCooldownUntil: 0,
+          aimOffset: 0,
+          aimRefreshAt: 0
         },
         ball: {
           x: 480,
@@ -205,6 +217,10 @@
           nextBeatAt: 0,
           beatStep: 0
         },
+        scoreLog: {
+          recent: [],
+          top: []
+        },
         vfx: {
           particles: [],
           shockwaves: [],
@@ -223,6 +239,7 @@
           fpsDegradeUntil: 0,
           autoPerfCooldownUntil: 0,
           hudNextSyncAt: 0,
+          scoreLogNextPruneAt: 0,
           hudCache: {
             pointsLabel: "",
             missesLabel: "",
@@ -330,6 +347,10 @@
         return min + Math.random() * (max - min);
       }
 
+      function lerp(start, end, t) {
+        return start + (end - start) * t;
+      }
+
       function detectCompatibilityProfile() {
         const ua = navigator.userAgent || "";
         const vendor = navigator.vendor || "";
@@ -420,7 +441,7 @@
         const meter = state.prism[side];
         let mult = 1 + (meter.value / PRISM_METER_MAX) * 0.24;
         if (meter.overexposeTimer > 0) {
-          mult += 0.14;
+          mult += 0.78;
         }
         return mult;
       }
@@ -438,9 +459,48 @@
         const enemyMeter = state.prism[getOpponentSide(side)];
         let factor = 1 - (enemyMeter.value / PRISM_METER_MAX) * 0.18;
         if (enemyMeter.overexposeTimer > 0) {
-          factor -= 0.08;
+          factor -= 0.3;
         }
-        return clamp(factor, 0.62, 1);
+        return clamp(factor, enemyMeter.overexposeTimer > 0 ? 0.34 : 0.62, 1);
+      }
+
+      function getShotSpeedCap(side, baseBonus) {
+        const overBoost = state.prism[side].overexposeTimer > 0 ? 520 : 0;
+        return state.ball.maxSpeed + baseBonus + overBoost;
+      }
+
+      function getAiDifficultyFactor() {
+        return clamp((state.settings.aiDifficulty - 1) / 9, 0, 1);
+      }
+
+      function canActivateOverexpose(side) {
+        const meter = state.prism[side];
+        return meter.overexposeTimer <= 0 && meter.value >= PRISM_METER_MAX;
+      }
+
+      function activateOverexpose(side, announce = true) {
+        if (!canActivateOverexpose(side)) {
+          return false;
+        }
+
+        const meter = state.prism[side];
+        meter.value = 0;
+        meter.overexposeTimer = PRISM_OVEREXPOSE_MS;
+        meter.shatterTimer = 0;
+
+        const x = side === "left" ? state.width * 0.24 : state.width * 0.76;
+        spawnShockwave(x, state.height * 0.5, hslColor(44, 100, 74, 0.9), 3.4, 190, 620);
+        spawnImpactVfx(x, state.height * 0.5, 44, sideToTravelDir(side), 0, 1.7);
+        state.vfx.screenTint = Math.max(state.vfx.screenTint, 0.34);
+        state.vfx.tintHue = 44;
+        state.shake = Math.max(state.shake, 12);
+
+        if (announce) {
+          const suffix = side === "left" ? " • overdrive online" : " • AI overdrive";
+          showToast(getSideLabel(side) + " triggered Overexpose" + suffix);
+        }
+        playSfx("overexpose_start");
+        return true;
       }
 
       function clearBallCharge() {
@@ -480,24 +540,21 @@
         const meter = state.prism[side];
 
         if (meter.overexposeTimer > 0) {
-          meter.overexposeTimer = Math.min(PRISM_OVEREXPOSE_MS, meter.overexposeTimer + amount * 18);
-          meter.value = PRISM_METER_MAX;
           return;
         }
 
+        const wasBelowCap = meter.value < PRISM_METER_MAX;
         meter.value = clamp(meter.value + amount, 0, PRISM_METER_MAX);
 
-        if (meter.value >= PRISM_METER_MAX) {
-          meter.value = PRISM_METER_MAX;
-          meter.overexposeTimer = PRISM_OVEREXPOSE_MS;
-          meter.shatterTimer = 0;
-
-          const x = side === "left" ? state.width * 0.22 : state.width * 0.78;
-          const intensity = showBurst ? 1.4 : 1.1;
-          spawnShockwave(x, state.height * 0.5, hslColor(40, 100, 74, 0.86), 3.2, 170, 560);
-          spawnImpactVfx(x, state.height * 0.5, 40, sideToTravelDir(side), 0, intensity);
-          showToast(getSideLabel(side) + " entered Overexpose Mode");
-          playSfx("overexpose_start");
+        if (meter.value >= PRISM_METER_MAX && wasBelowCap) {
+          if (showBurst) {
+            const x = side === "left" ? state.width * 0.22 : state.width * 0.78;
+            const intensity = 1.2;
+            spawnShockwave(x, state.height * 0.5, hslColor(40, 100, 74, 0.86), 3.2, 170, 560);
+            spawnImpactVfx(x, state.height * 0.5, 40, sideToTravelDir(side), 0, intensity);
+          }
+          showToast(getSideLabel(side) + (side === "left" ? " Overexpose ready • press E" : " Overexpose ready"));
+          playSfx("event_start");
         }
       }
 
@@ -575,6 +632,183 @@
         const minutes = Math.floor(totalSec / 60).toString().padStart(2, "0");
         const seconds = (totalSec % 60).toString().padStart(2, "0");
         return minutes + ":" + seconds;
+      }
+
+      function formatLogTime(ts) {
+        const date = new Date(ts);
+        return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      }
+
+      function hasMatchProgress() {
+        return (
+          state.score.points > 0 ||
+          state.score.misses > 0 ||
+          state.score.player1 > 0 ||
+          state.score.player2 > 0
+        );
+      }
+
+      function getCurrentRunScore() {
+        if (state.settings.aiEnabled) {
+          return state.score.points;
+        }
+        return Math.max(state.score.player1, state.score.player2);
+      }
+
+      function buildScoreLogEntry(reason = "reset") {
+        return {
+          id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+          ts: Date.now(),
+          score: getCurrentRunScore(),
+          aiEnabled: state.settings.aiEnabled,
+          gameMode: state.settings.gameMode,
+          modeLabel: getModeConfig().label,
+          player1: state.score.player1,
+          player2: state.score.player2,
+          misses: state.score.misses,
+          reason
+        };
+      }
+
+      function normalizeScoreLogEntry(entry) {
+        if (!entry || typeof entry !== "object") {
+          return null;
+        }
+        const score = Number(entry.score);
+        const ts = Number(entry.ts);
+        if (!Number.isFinite(score) || score < 0 || !Number.isFinite(ts) || ts <= 0) {
+          return null;
+        }
+        return {
+          id: typeof entry.id === "string" && entry.id ? entry.id : ts.toString(36),
+          ts,
+          score: Math.round(score),
+          aiEnabled: !!entry.aiEnabled,
+          gameMode: typeof entry.gameMode === "string" ? entry.gameMode : "classic",
+          modeLabel: typeof entry.modeLabel === "string" && entry.modeLabel ? entry.modeLabel : "Classic Prism",
+          player1: Number.isFinite(Number(entry.player1)) ? Math.max(0, Math.round(Number(entry.player1))) : 0,
+          player2: Number.isFinite(Number(entry.player2)) ? Math.max(0, Math.round(Number(entry.player2))) : 0,
+          misses: Number.isFinite(Number(entry.misses)) ? Math.max(0, Math.round(Number(entry.misses))) : 0,
+          reason: typeof entry.reason === "string" ? entry.reason : "reset"
+        };
+      }
+
+      function pruneScoreLogs(now = Date.now()) {
+        let changed = false;
+
+        const nextRecent = state.scoreLog.recent
+          .map(normalizeScoreLogEntry)
+          .filter(Boolean)
+          .filter((entry) => now - entry.ts <= SCORE_LOG_RECENT_TTL_MS)
+          .sort((a, b) => b.ts - a.ts)
+          .slice(0, 40);
+        if (nextRecent.length !== state.scoreLog.recent.length) {
+          changed = true;
+        }
+
+        const nextTop = state.scoreLog.top
+          .map(normalizeScoreLogEntry)
+          .filter(Boolean)
+          .filter((entry) => now - entry.ts <= SCORE_LOG_TOP_TTL_MS)
+          .sort((a, b) => (b.score - a.score) || (b.ts - a.ts))
+          .slice(0, SCORE_LOG_TOP_MAX);
+        if (nextTop.length !== state.scoreLog.top.length) {
+          changed = true;
+        }
+
+        state.scoreLog.recent = nextRecent;
+        state.scoreLog.top = nextTop;
+        return changed;
+      }
+
+      function saveScoreLogs() {
+        try {
+          localStorage.setItem(SCORE_LOG_STORAGE_KEY, JSON.stringify(state.scoreLog));
+        } catch (_err) {
+          // ignore storage failures (private mode / quota)
+        }
+      }
+
+      function loadScoreLogs() {
+        try {
+          const raw = localStorage.getItem(SCORE_LOG_STORAGE_KEY);
+          if (!raw) {
+            return;
+          }
+          const parsed = JSON.parse(raw);
+          state.scoreLog.recent = Array.isArray(parsed.recent) ? parsed.recent : [];
+          state.scoreLog.top = Array.isArray(parsed.top) ? parsed.top : [];
+          const changed = pruneScoreLogs(Date.now());
+          if (changed) {
+            saveScoreLogs();
+          }
+        } catch (_err) {
+          state.scoreLog.recent = [];
+          state.scoreLog.top = [];
+        }
+      }
+
+      function renderScoreEntries(target, entries, emptyText) {
+        if (!target) {
+          return;
+        }
+        target.textContent = "";
+        if (!entries.length) {
+          const empty = document.createElement("li");
+          empty.textContent = emptyText;
+          target.appendChild(empty);
+          return;
+        }
+
+        for (const entry of entries) {
+          const li = document.createElement("li");
+
+          const main = document.createElement("div");
+          main.className = "score-line";
+          const scoreText = document.createElement("strong");
+          scoreText.textContent = String(entry.score);
+          const stamp = document.createElement("span");
+          stamp.textContent = formatLogTime(entry.ts);
+          main.append(scoreText, stamp);
+
+          const mode = document.createElement("div");
+          mode.className = "score-mode";
+          mode.textContent = entry.modeLabel;
+
+          const meta = document.createElement("div");
+          if (entry.aiEnabled) {
+            meta.textContent = "AI • misses " + entry.misses + " • P1 " + entry.player1;
+          } else {
+            meta.textContent = "P1 " + entry.player1 + " vs P2 " + entry.player2;
+          }
+
+          li.append(main, mode, meta);
+          target.appendChild(li);
+        }
+      }
+
+      function renderScoreLogs() {
+        renderScoreEntries(recentScoreList, state.scoreLog.recent, "No recent runs yet.");
+        renderScoreEntries(topScoreList, state.scoreLog.top, "No top runs yet.");
+      }
+
+      function recordScoreLogIfNeeded(reason = "reset") {
+        if (!hasMatchProgress()) {
+          return;
+        }
+
+        const entry = buildScoreLogEntry(reason);
+        state.scoreLog.recent.unshift(entry);
+        state.scoreLog.top.push(entry);
+        pruneScoreLogs(Date.now());
+        saveScoreLogs();
+        renderScoreLogs();
+      }
+
+      function updateAiDifficultyLabel() {
+        if (aiDifficultyValue) {
+          aiDifficultyValue.textContent = state.settings.aiDifficulty + " / 10";
+        }
       }
 
       function updateLagState(frameMs, now) {
@@ -935,7 +1169,7 @@
         const travelDir = sideToTravelDir(side);
         const currentSpeed = Math.hypot(state.ball.vx, state.ball.vy);
         const shotPower = getPrismShotPower(side);
-        const comboSpeed = clamp((currentSpeed + 430) * shotPower, 760, state.ball.maxSpeed + 420);
+        const comboSpeed = clamp((currentSpeed + 430) * shotPower, 760, getShotSpeedCap(side, 420));
 
         if (attachedToThis) {
           const releaseDir = type === "burstUp" ? -1 : 1;
@@ -963,7 +1197,7 @@
           playSfx("combo_wave");
         } else {
           const burstDir = type === "burstUp" ? -1 : 1;
-          const burstSpeed = clamp(comboSpeed * 0.94, 860, state.ball.maxSpeed + 460);
+          const burstSpeed = clamp(comboSpeed * 0.94, 860, getShotSpeedCap(side, 460));
           state.ball.vx = travelDir * burstSpeed * 0.86;
           state.ball.vy = burstDir * burstSpeed;
           state.ball.combo.mode = "burst";
@@ -1132,8 +1366,18 @@
           prismRight.classList.toggle("shatter", rightShatter);
         }
 
-        const leftText = leftOver ? "x" + getPrismScoreMultiplier("left").toFixed(2) : Math.round(leftPct) + "%";
-        const rightText = rightOver ? "x" + getPrismScoreMultiplier("right").toFixed(2) : Math.round(rightPct) + "%";
+        const leftReady = canActivateOverexpose("left");
+        const rightReady = canActivateOverexpose("right");
+        const leftText = leftOver
+          ? "Overdrive " + Math.ceil(left.overexposeTimer / 1000) + "s"
+          : leftReady
+            ? "Ready (E)"
+            : Math.round(leftPct) + "%";
+        const rightText = rightOver
+          ? "Overdrive " + Math.ceil(right.overexposeTimer / 1000) + "s"
+          : rightReady
+            ? "Ready"
+            : Math.round(rightPct) + "%";
 
         if (cache.prismLeftText !== leftText) {
           cache.prismLeftText = leftText;
@@ -1378,10 +1622,10 @@
         const delta = source.y - source.lastY;
         const power = getPrismShotPower(side);
 
-        state.ball.vx = direction * clamp((Math.abs(state.ball.vx) + 80) * power, 320, state.ball.maxSpeed + 160);
+        state.ball.vx = direction * clamp((Math.abs(state.ball.vx) + 80) * power, 320, getShotSpeedCap(side, 160));
 
         if (flickDir !== 0) {
-          state.ball.vx = direction * clamp((Math.abs(state.ball.vx) + 160) * power, 460, state.ball.maxSpeed + 210);
+          state.ball.vx = direction * clamp((Math.abs(state.ball.vx) + 160) * power, 460, getShotSpeedCap(side, 210));
           state.ball.vy = clamp(flickDir * (Math.abs(state.ball.vy) + 440) * power, -980, 980);
           playSfx(flickDir < 0 ? "flick_up" : "flick_down");
         } else {
@@ -1436,7 +1680,7 @@
 
         const travelDir = sideToTravelDir(side);
         const shotPower = getPrismShotPower(side);
-        const flickSpeed = clamp((Math.hypot(state.ball.vx, state.ball.vy) + 220) * shotPower, 420, state.ball.maxSpeed + 220);
+        const flickSpeed = clamp((Math.hypot(state.ball.vx, state.ball.vy) + 220) * shotPower, 420, getShotSpeedCap(side, 220));
 
         state.ball.vx = travelDir * flickSpeed * 0.82;
         state.ball.vy = clamp(dirSign * flickSpeed, -980, 980);
@@ -1503,6 +1747,8 @@
       }
 
       function resetMatch() {
+        recordScoreLogIfNeeded("reset");
+
         state.score.points = 0;
         state.score.misses = 0;
         state.score.streak = 0;
@@ -1527,6 +1773,8 @@
         state.player.flickTimer = 0;
         state.ai.flickTimer = 0;
         state.ai.actionCooldownUntil = 0;
+        state.ai.aimOffset = 0;
+        state.ai.aimRefreshAt = 0;
 
         state.prism.left.value = 0;
         state.prism.left.overexposeTimer = 0;
@@ -1642,13 +1890,36 @@
         const stickyAttached = state.ball.sticky.attachedTo === "ai";
         const closeToBall = isBallCloseToPaddle(state.ai, "right");
         const incoming = state.ball.vx > 70 || stickyAttached;
+        const difficulty = getAiDifficultyFactor();
+
+        if (canActivateOverexpose("right")) {
+          const triggerChance = 0.16 + difficulty * 0.55;
+          if (Math.random() < triggerChance) {
+            activateOverexpose("right", true);
+            state.ai.actionCooldownUntil = now + rand(220, 420);
+            return;
+          }
+        }
 
         if (!incoming || (!closeToBall && !stickyAttached)) {
           return;
         }
 
         const centerDelta = state.ball.y - (state.ai.y + state.ai.height * 0.5);
-        const dirSign = centerDelta < -8 ? -1 : centerDelta > 8 ? 1 : (Math.random() < 0.5 ? -1 : 1);
+        const threshold = lerp(16, 6, difficulty);
+        let dirSign;
+        if (centerDelta < -threshold) {
+          dirSign = -1;
+        } else if (centerDelta > threshold) {
+          dirSign = 1;
+        } else {
+          const followCenterChance = lerp(0.4, 0.92, difficulty);
+          if (Math.random() < followCenterChance) {
+            dirSign = centerDelta === 0 ? (Math.random() < 0.5 ? -1 : 1) : (centerDelta < 0 ? -1 : 1);
+          } else {
+            dirSign = Math.random() < 0.5 ? -1 : 1;
+          }
+        }
 
         const speed = Math.hypot(state.ball.vx, state.ball.vy);
         const mode = getModeConfig();
@@ -1658,6 +1929,14 @@
         }
         if (!mode.eventsEnabled) {
           comboChance += 0.04;
+        }
+        comboChance += lerp(-0.12, 0.18, difficulty);
+        comboChance = clamp(comboChance, 0.08, 0.9);
+
+        const reactionChance = lerp(0.56, 0.98, difficulty);
+        if (Math.random() > reactionChance) {
+          state.ai.actionCooldownUntil = now + rand(180, 330);
+          return;
         }
 
         let acted = false;
@@ -1671,11 +1950,11 @@
 
         if (!acted) {
           tryFlick("right", dirSign);
-          state.ai.actionCooldownUntil = now + rand(160, 300);
+          state.ai.actionCooldownUntil = now + rand(lerp(260, 130, difficulty), lerp(420, 250, difficulty));
           return;
         }
 
-        state.ai.actionCooldownUntil = now + rand(390, 680);
+        state.ai.actionCooldownUntil = now + rand(lerp(540, 300, difficulty), lerp(780, 520, difficulty));
       }
 
       function updateAi(dt) {
@@ -1684,6 +1963,13 @@
 
         const center = state.ai.y + state.ai.height * 0.5;
         const movingTowardAi = state.ball.vx > 20 || state.ball.sticky.attachedTo === "ai";
+        const difficulty = getAiDifficultyFactor();
+
+        if (now >= state.ai.aimRefreshAt) {
+          const maxError = lerp(86, 8, difficulty);
+          state.ai.aimOffset = rand(-maxError, maxError);
+          state.ai.aimRefreshAt = now + lerp(520, 120, difficulty);
+        }
 
         let targetY;
         if (movingTowardAi && state.ball.vx > 20) {
@@ -1696,10 +1982,14 @@
           targetY = state.height * 0.5 + Math.sin(now * 0.0024) * 16;
         }
 
-        const moveScale = movingTowardAi ? 1.12 : 0.74;
+        targetY = clamp(targetY + state.ai.aimOffset, state.ball.radius, state.height - state.ball.radius);
+
+        const moveScale = movingTowardAi ? lerp(0.78, 1.22, difficulty) : lerp(0.6, 0.9, difficulty);
         const aiSpeed = state.ai.baseSpeed * getOpponentSlowFactor("right");
         const maxStep = aiSpeed * moveScale * dt;
-        const step = clamp(targetY - center, -maxStep, maxStep);
+        const delta = targetY - center;
+        const deadZone = lerp(18, 4, difficulty);
+        const step = Math.abs(delta) <= deadZone ? 0 : clamp(delta, -maxStep, maxStep);
 
         state.ai.y += step;
         state.ai.y = clamp(state.ai.y, 0, state.height - state.ai.height);
@@ -1773,7 +2063,7 @@
         const paddleCenter = paddle.y + paddle.height * 0.5;
         const normalized = clamp((state.ball.y - paddleCenter) / (paddle.height * 0.5), -1, 1);
         const shotPower = getPrismShotPower(side);
-        const speed = clamp((Math.hypot(state.ball.vx, state.ball.vy) + 24) * shotPower, 330, state.ball.maxSpeed + 80);
+        const speed = clamp((Math.hypot(state.ball.vx, state.ball.vy) + 24) * shotPower, 330, getShotSpeedCap(side, 80));
 
         const horizontal = Math.cos(normalized * 0.95);
         const vertical = Math.sin(normalized * 1.15);
@@ -2003,9 +2293,7 @@
 
           if (meter.overexposeTimer > 0) {
             meter.overexposeTimer = Math.max(0, meter.overexposeTimer - dt * 1000);
-            meter.value = PRISM_METER_MAX;
             if (meter.overexposeTimer <= 0) {
-              meter.value = PRISM_METER_MAX * 0.36;
               showToast(getSideLabel(side) + " Overexpose faded");
               playSfx("overexpose_end");
             }
@@ -2621,6 +2909,10 @@
 
       function setPauseView(view) {
         if (view === "settings") {
+          if (pruneScoreLogs(Date.now())) {
+            saveScoreLogs();
+          }
+          renderScoreLogs();
           pauseMain.style.display = "none";
           settingsPanel.classList.add("active");
           pauseTitle.textContent = "Settings";
@@ -2740,11 +3032,14 @@
         ultraPerfToggle.checked = state.settings.ultraPerformanceMode;
         pointerAssistToggle.checked = state.settings.pointerAssist;
         gameModeSelect.value = state.settings.gameMode;
+        aiDifficulty.value = String(state.settings.aiDifficulty);
+        aiDifficulty.disabled = !state.settings.aiEnabled;
         masterVolume.disabled = !state.settings.audioEnabled;
         musicToggle.disabled = !state.settings.audioEnabled;
         musicVolume.disabled = !state.settings.audioEnabled || !state.settings.musicEnabled;
         sfxToggle.disabled = !state.settings.audioEnabled;
         sfxVolume.disabled = !state.settings.audioEnabled || !state.settings.sfxEnabled;
+        updateAiDifficultyLabel();
         document.body.classList.toggle("perf-mode", state.settings.performanceMode);
         document.body.classList.toggle("ultra-perf", state.settings.ultraPerformanceMode);
         document.body.classList.toggle("compat-mode", state.runtime.compatibility.isSafariLike);
@@ -2769,6 +3064,14 @@
           updateMusic(now);
           if (state.settings.performanceMode || state.runtime.lagDetected || state.runtime.compatibility.isSafariLike) {
             trimEffectsForPerformance();
+          }
+        }
+
+        if (now >= state.runtime.scoreLogNextPruneAt) {
+          state.runtime.scoreLogNextPruneAt = now + 10000;
+          if (pruneScoreLogs(Date.now())) {
+            saveScoreLogs();
+            renderScoreLogs();
           }
         }
 
@@ -2813,6 +3116,16 @@
           pulseKey("p1Up");
           tryFlick("left", -1);
           trackPlayerComboInput("d");
+        }
+        if (lower === "e") {
+          pulseKey("p1Overexpose");
+          if (!activateOverexpose("left", true)) {
+            if (state.prism.left.overexposeTimer > 0) {
+              showToast("Overexpose already active");
+            } else {
+              showToast("Fill the prism meter to 100% first");
+            }
+          }
         }
         if (key === "ArrowLeft") {
           pulseKey("p2Up");
@@ -2963,9 +3276,15 @@
         state.input.p2Up = false;
         state.input.p2Down = false;
         manualBlock.classList.toggle("active", !state.settings.aiEnabled);
+        syncSettingsUi();
         state.runtime.hudNextSyncAt = 0;
         syncHud(performance.now(), true);
         showToast(state.settings.aiEnabled ? "AI opponent enabled" : "Local 2-player enabled");
+      });
+
+      aiDifficulty.addEventListener("input", () => {
+        state.settings.aiDifficulty = clamp(Math.round(Number(aiDifficulty.value) || 6), 1, 10);
+        updateAiDifficultyLabel();
       });
 
       autoGraphicsToggle.addEventListener("change", () => {
@@ -3063,6 +3382,8 @@
         showToast(state.settings.ultraPerformanceMode ? "Ultra performance enabled" : "Ultra performance disabled");
       });
 
+      loadScoreLogs();
+      renderScoreLogs();
       detectCompatibilityProfile();
       syncSettingsUi();
       resize();

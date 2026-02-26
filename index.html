@@ -51,22 +51,13 @@
           <div id="settingsPanel" class="settings-panel">
             <div class="settings-tabs" role="tablist" aria-label="Settings tabs">
               <button class="tab-btn active" data-tab-target="graphicsTab" type="button" role="tab">Graphics</button>
+              <button class="tab-btn" data-tab-target="gameplayTab" type="button" role="tab">Gameplay</button>
               <button class="tab-btn" data-tab-target="audioTab" type="button" role="tab">Audio</button>
               <button class="tab-btn" data-tab-target="controlsTab" type="button" role="tab">Controls</button>
               <button class="tab-btn" data-tab-target="helpTab" type="button" role="tab">Help</button>
             </div>
 
             <section class="tab-panel active" id="graphicsTab" role="tabpanel">
-              <label class="setting-line" for="gameModeSelect">
-                <span>Game Mode</span>
-                <select id="gameModeSelect" class="select-input">
-                  <option value="classic">Classic Prism</option>
-                  <option value="chaos">Arcade Chaos</option>
-                  <option value="duel">Duel Mode</option>
-                  <option value="survival">Light Survival</option>
-                </select>
-              </label>
-              <p class="setting-note">Classic: balanced events. Chaos: faster events. Duel: no random events. Survival: speed ramps every 10s.</p>
               <label class="setting-line" for="autoGraphicsToggle">
                 <span>Auto Graphics</span>
                 <input id="autoGraphicsToggle" class="toggle" type="checkbox" checked />
@@ -81,6 +72,41 @@
                 <input id="ultraPerfToggle" class="toggle" type="checkbox" />
               </label>
               <p class="setting-note">Performance mode reduces VFX density and graphics cost. Ultra mode cuts effects further for max FPS.</p>
+            </section>
+
+            <section class="tab-panel" id="gameplayTab" role="tabpanel">
+              <label class="setting-line" for="gameModeSelect">
+                <span>Game Mode</span>
+                <select id="gameModeSelect" class="select-input">
+                  <option value="classic">Classic Prism</option>
+                  <option value="chaos">Arcade Chaos</option>
+                  <option value="duel">Duel Mode</option>
+                  <option value="survival">Light Survival</option>
+                </select>
+              </label>
+              <p class="setting-note">Classic: balanced events. Chaos: faster events. Duel: no random events. Survival: speed ramps every 10s.</p>
+
+              <label class="setting-line" for="aiDifficulty">
+                <span>AI Difficulty</span>
+                <div class="slider-inline">
+                  <input id="aiDifficulty" class="slider" type="range" min="1" max="10" step="1" value="6" />
+                  <strong id="aiDifficultyValue" class="inline-value">6 / 10</strong>
+                </div>
+              </label>
+              <p class="setting-note">Lower values add aiming mistakes and slower reactions. Higher values make AI more precise and aggressive.</p>
+
+              <div class="score-columns">
+                <article class="score-block">
+                  <h3>Recent Score Log</h3>
+                  <p class="setting-note">Recent matches clear automatically after 20 minutes.</p>
+                  <ul id="recentScoreList" class="score-list"></ul>
+                </article>
+                <article class="score-block">
+                  <h3>Top Scores</h3>
+                  <p class="setting-note">Best runs are saved. Older weaker entries are trimmed over time.</p>
+                  <ol id="topScoreList" class="score-list"></ol>
+                </article>
+              </div>
             </section>
 
             <section class="tab-panel" id="audioTab" role="tabpanel">
@@ -120,6 +146,10 @@
                 <div class="key-row">
                   <span id="keyD" class="key-chip">D</span>
                   <span>Up smash: sends ball up fast</span>
+                </div>
+                <div class="key-row">
+                  <span id="keyE" class="key-chip">E</span>
+                  <span>Use Overexpose when your prism meter is full</span>
                 </div>
               </div>
               <label class="setting-line" for="pointerAssistToggle">
@@ -167,7 +197,7 @@
               </article>
               <article class="help-block">
                 <h3>Prism Meter</h3>
-                <p>Returns fill your meter. Higher meter adds shot power and score multiplier. At 100% you enter Overexpose Mode for stronger bonuses until it fades.</p>
+                <p>Returns fill your meter. At 100%, press <strong>E</strong> to trigger Overexpose: your shots become much faster and the opponent slows briefly, then your meter resets.</p>
               </article>
               <article class="help-block">
                 <h3>Random Events</h3>
@@ -175,7 +205,7 @@
               </article>
               <article class="help-block">
                 <h3>Pause & Modes</h3>
-                <p>Press <strong>Esc</strong> or <strong>P</strong> to open pause. Use Game Mode in Graphics to swap between Classic, Chaos, Duel, and Light Survival.</p>
+                <p>Press <strong>Esc</strong> or <strong>P</strong> to open pause. Use Game Mode in Gameplay to swap between Classic, Chaos, Duel, and Light Survival.</p>
               </article>
             </section>
 
