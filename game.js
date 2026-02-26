@@ -2,6 +2,9 @@
       const canvas = document.getElementById("pong");
       const ctx = canvas.getContext("2d");
 
+      const pointsLabel = document.getElementById("pointsLabel");
+      const missesLabel = document.getElementById("missesLabel");
+      const streakLabel = document.getElementById("streakLabel");
       const pointsValue = document.getElementById("pointsValue");
       const missesValue = document.getElementById("missesValue");
       const streakValue = document.getElementById("streakValue");
@@ -27,6 +30,15 @@
       const aiToggle = document.getElementById("aiToggle");
       const pointerAssistToggle = document.getElementById("pointerAssistToggle");
       const manualBlock = document.getElementById("manualBlock");
+      const gameModeSelect = document.getElementById("gameModeSelect");
+
+      const prismLeft = document.getElementById("prismLeft");
+      const prismRight = document.getElementById("prismRight");
+      const prismMeterLeftFill = document.getElementById("prismMeterLeftFill");
+      const prismMeterRightFill = document.getElementById("prismMeterRightFill");
+      const prismMeterLeftText = document.getElementById("prismMeterLeftText");
+      const prismMeterRightText = document.getElementById("prismMeterRightText");
+      const prismRightLabel = document.getElementById("prismRightLabel");
 
       const tabButtons = Array.from(document.querySelectorAll(".tab-btn"));
       const tabPanels = Array.from(document.querySelectorAll(".tab-panel"));
@@ -37,6 +49,13 @@
         p2Up: document.getElementById("keyLeft"),
         p2Down: document.getElementById("keyRight")
       };
+
+      const PLAYER_COMBO_WINDOW_MS = 2800;
+      const COMBO_BUFFER_MS = 3400;
+      const PERFECT_FLICK_WINDOW_MS = 200;
+      const PRISM_METER_MAX = 100;
+      const PRISM_OVEREXPOSE_MS = 7000;
+      const FREEZE_SLOW_FACTOR = 0.25;
 
       const state = {
         width: 960,
@@ -50,7 +69,9 @@
         score: {
           points: 0,
           misses: 0,
-          streak: 0
+          streak: 0,
+          player1: 0,
+          player2: 0
         },
         settings: {
           aiEnabled: true,
@@ -58,7 +79,8 @@
           musicEnabled: true,
           musicVolume: 0.35,
           performanceMode: false,
-          ultraPerformanceMode: false
+          ultraPerformanceMode: false,
+          gameMode: "classic"
         },
         input: {
           p1Up: false,
@@ -69,8 +91,12 @@
           pointerActive: false
         },
         combo: {
-          windowMs: 760,
-          inputs: []
+          windowMs: PLAYER_COMBO_WINDOW_MS,
+          inputs: [],
+          pending: {
+            left: null,
+            right: null
+          }
         },
         player: {
           x: 24,
@@ -78,6 +104,7 @@
           width: 15,
           height: 116,
           baseHeight: 116,
+          baseSpeed: 580,
           speed: 580,
           lastY: 220,
           flickTimer: 0,
@@ -89,11 +116,14 @@
           width: 15,
           height: 116,
           baseHeight: 116,
+          baseSpeed: 470,
           speed: 470,
+          baseManualSpeed: 620,
           manualSpeed: 620,
           lastY: 220,
           flickTimer: 0,
-          flickDir: 0
+          flickDir: 0,
+          actionCooldownUntil: 0
         },
         ball: {
           x: 480,
@@ -102,11 +132,19 @@
           vy: 170,
           radius: 11,
           baseRadius: 11,
+          baseMaxSpeed: 900,
           maxSpeed: 900,
           respawnTimer: 0,
           trail: [],
+          lastTouch: null,
           sticky: {
             attachedTo: null,
+            timer: 0
+          },
+          charge: {
+            active: false,
+            owner: null,
+            multiplier: 2,
             timer: 0
           },
           combo: {
@@ -116,7 +154,9 @@
             baseVy: 0,
             travelDir: 1,
             speed: 0,
-            vfxTick: 0
+            vfxTick: 0,
+            owner: null,
+            freezeBoost: false
           }
         },
         events: {
@@ -127,6 +167,27 @@
           sticky: false,
           freeze: false,
           large: false
+        },
+        prism: {
+          left: {
+            value: 0,
+            overexposeTimer: 0,
+            shatterTimer: 0
+          },
+          right: {
+            value: 0,
+            overexposeTimer: 0,
+            shatterTimer: 0
+          }
+        },
+        survival: {
+          elapsedMs: 0,
+          nextRampMs: 10000,
+          level: 0
+        },
+        flick: {
+          leftLastAt: -1,
+          rightLastAt: -1
         },
         audio: {
           ctx: null,
@@ -168,8 +229,8 @@
         },
         freeze: {
           label: "Freeze Ball",
-          duration: 2800,
-          announce: "Freeze Ball: ball movement halted"
+          duration: 3200,
+          announce: "Freeze Ball: ball slowed to 25% speed"
         },
         sticky: {
           label: "Sticky Ball",
@@ -185,6 +246,37 @@
         { name: "rainbow", weight: 0.10 }
       ];
 
+      const GAME_MODES = {
+        classic: {
+          label: "Classic Prism",
+          eventsEnabled: true,
+          eventMinMs: 6500,
+          eventMaxMs: 14000,
+          survival: false
+        },
+        chaos: {
+          label: "Arcade Chaos",
+          eventsEnabled: true,
+          eventMinMs: 3200,
+          eventMaxMs: 7600,
+          survival: false
+        },
+        duel: {
+          label: "Duel Mode",
+          eventsEnabled: false,
+          eventMinMs: 0,
+          eventMaxMs: 0,
+          survival: false
+        },
+        survival: {
+          label: "Light Survival",
+          eventsEnabled: true,
+          eventMinMs: 5500,
+          eventMaxMs: 11000,
+          survival: true
+        }
+      };
+
       const FLICK_ANIM_MS = 180;
       const MAX_VFX_PARTICLES = 280;
       const MAX_VFX_SHOCKWAVES = 36;
@@ -198,6 +290,233 @@
       function rand(min, max) {
         return min + Math.random() * (max - min);
       }
+
+      function getModeConfig() {
+        return GAME_MODES[state.settings.gameMode] || GAME_MODES.classic;
+      }
+
+      function getSideLabel(side) {
+        if (side === "left") {
+          return "P1";
+        }
+        return state.settings.aiEnabled ? "AI" : "P2";
+      }
+
+      function getOpponentSide(side) {
+        return side === "left" ? "right" : "left";
+      }
+
+      function sideToTravelDir(side) {
+        return side === "left" ? 1 : -1;
+      }
+
+      function travelDirToSide(dir) {
+        return dir >= 0 ? "left" : "right";
+      }
+
+      function getSurvivalSpeedMultiplier() {
+        const config = getModeConfig();
+        if (!config.survival) {
+          return 1;
+        }
+        return 1 + state.survival.level * 0.1;
+      }
+
+      function refreshBallMaxSpeed() {
+        state.ball.maxSpeed = state.ball.baseMaxSpeed * getSurvivalSpeedMultiplier();
+      }
+
+      function resetSurvivalState() {
+        state.survival.elapsedMs = 0;
+        state.survival.nextRampMs = 10000;
+        state.survival.level = 0;
+        refreshBallMaxSpeed();
+      }
+
+      function updateSurvivalRamp(dt) {
+        const config = getModeConfig();
+        if (!config.survival) {
+          return;
+        }
+
+        state.survival.elapsedMs += dt * 1000;
+
+        while (state.survival.elapsedMs >= state.survival.nextRampMs) {
+          state.survival.level += 1;
+          state.survival.nextRampMs += 10000;
+          refreshBallMaxSpeed();
+
+          const boost = 1.085;
+          state.ball.vx *= boost;
+          state.ball.vy *= boost;
+
+          state.shake = Math.max(state.shake, 5);
+          showToast("Light Survival Lv " + (state.survival.level + 1));
+          playSfx("survival_ramp");
+        }
+      }
+
+      function getPrismShotPower(side) {
+        const meter = state.prism[side];
+        let mult = 1 + (meter.value / PRISM_METER_MAX) * 0.24;
+        if (meter.overexposeTimer > 0) {
+          mult += 0.14;
+        }
+        return mult;
+      }
+
+      function getPrismScoreMultiplier(side) {
+        const meter = state.prism[side];
+        let mult = 1 + (meter.value / PRISM_METER_MAX) * 0.5;
+        if (meter.overexposeTimer > 0) {
+          mult += 0.55;
+        }
+        return mult;
+      }
+
+      function getOpponentSlowFactor(side) {
+        const enemyMeter = state.prism[getOpponentSide(side)];
+        let factor = 1 - (enemyMeter.value / PRISM_METER_MAX) * 0.18;
+        if (enemyMeter.overexposeTimer > 0) {
+          factor -= 0.08;
+        }
+        return clamp(factor, 0.62, 1);
+      }
+
+      function clearBallCharge() {
+        state.ball.charge.active = false;
+        state.ball.charge.owner = null;
+        state.ball.charge.multiplier = 2;
+        state.ball.charge.timer = 0;
+      }
+
+      function armPerfectCharge(side) {
+        state.ball.charge.active = true;
+        state.ball.charge.owner = side;
+        state.ball.charge.multiplier = 2;
+        state.ball.charge.timer = 3200;
+
+        spawnShockwave(state.ball.x, state.ball.y, hslColor(44, 100, 72, 0.85), 2.8, 104, 420);
+        spawnImpactVfx(state.ball.x, state.ball.y, 44, sideToTravelDir(side), 0, 1.15);
+        showToast(getSideLabel(side) + " Perfect Flick: Charge x2");
+        playSfx("perfect_flick");
+      }
+
+      function consumeChargeMultiplier(side) {
+        if (!state.ball.charge.active || state.ball.charge.owner !== side) {
+          return 1;
+        }
+
+        const mult = state.ball.charge.multiplier || 2;
+        clearBallCharge();
+        return mult;
+      }
+
+      function addPrism(side, amount, showBurst = true) {
+        if (!side || amount <= 0) {
+          return;
+        }
+
+        const meter = state.prism[side];
+
+        if (meter.overexposeTimer > 0) {
+          meter.overexposeTimer = Math.min(PRISM_OVEREXPOSE_MS, meter.overexposeTimer + amount * 18);
+          meter.value = PRISM_METER_MAX;
+          return;
+        }
+
+        meter.value = clamp(meter.value + amount, 0, PRISM_METER_MAX);
+
+        if (meter.value >= PRISM_METER_MAX) {
+          meter.value = PRISM_METER_MAX;
+          meter.overexposeTimer = PRISM_OVEREXPOSE_MS;
+          meter.shatterTimer = 0;
+
+          const x = side === "left" ? state.width * 0.22 : state.width * 0.78;
+          const intensity = showBurst ? 1.4 : 1.1;
+          spawnShockwave(x, state.height * 0.5, hslColor(40, 100, 74, 0.86), 3.2, 170, 560);
+          spawnImpactVfx(x, state.height * 0.5, 40, sideToTravelDir(side), 0, intensity);
+          showToast(getSideLabel(side) + " entered Overexpose Mode");
+          playSfx("overexpose_start");
+        }
+      }
+
+      function shatterPrism(side) {
+        const meter = state.prism[side];
+        if (meter.value <= 0 && meter.overexposeTimer <= 0) {
+          return;
+        }
+
+        meter.value = 0;
+        meter.overexposeTimer = 0;
+        meter.shatterTimer = 520;
+
+        const x = side === "left" ? state.width * 0.18 : state.width * 0.82;
+        spawnImpactVfx(x, state.height * 0.5, 352, sideToTravelDir(side), 0, 1.5);
+        spawnShockwave(x, state.height * 0.5, hslColor(352, 100, 72, 0.8), 2.8, 130, 440);
+        playSfx("meter_shatter");
+      }
+
+      function scoreWithPrism(baseValue, side, consumeCharge = true) {
+        let multiplier = getPrismScoreMultiplier(side);
+
+        if (state.ball.combo.mode && state.ball.combo.owner === side) {
+          multiplier += state.ball.combo.freezeBoost ? 0.42 : 0.22;
+        }
+
+        if (consumeCharge) {
+          multiplier *= consumeChargeMultiplier(side);
+        }
+
+        return Math.max(1, Math.round(baseValue * multiplier));
+      }
+
+      function queueCombo(side, type, label) {
+        const now = performance.now();
+        state.combo.pending[side] = {
+          type,
+          label,
+          expiresAt: now + COMBO_BUFFER_MS
+        };
+        showToast(getSideLabel(side) + " combo primed: " + label);
+      }
+
+      function pruneComboBuffers(now) {
+        if (state.combo.pending.left && now > state.combo.pending.left.expiresAt) {
+          state.combo.pending.left = null;
+        }
+
+        if (state.combo.pending.right && now > state.combo.pending.right.expiresAt) {
+          state.combo.pending.right = null;
+        }
+      }
+
+      function tryApplyBufferedCombo(side, showCue = true) {
+        const pending = state.combo.pending[side];
+        if (!pending) {
+          return false;
+        }
+
+        const now = performance.now();
+        if (now > pending.expiresAt) {
+          state.combo.pending[side] = null;
+          return false;
+        }
+
+        const activated = applyComboMove(side, pending.type, showCue);
+        if (activated) {
+          state.combo.pending[side] = null;
+        }
+        return activated;
+      }
+
+      function formatTimeMs(ms) {
+        const totalSec = Math.max(0, Math.floor(ms / 1000));
+        const minutes = Math.floor(totalSec / 60).toString().padStart(2, "0");
+        const seconds = (totalSec % 60).toString().padStart(2, "0");
+        return minutes + ":" + seconds;
+      }
+
       function updateLagState(frameMs, now) {
         const runtime = state.runtime;
         runtime.frameMsEMA = runtime.frameMsEMA * 0.9 + frameMs * 0.1;
@@ -286,6 +605,8 @@
         state.ball.combo.travelDir = 1;
         state.ball.combo.speed = 0;
         state.ball.combo.vfxTick = 0;
+        state.ball.combo.owner = null;
+        state.ball.combo.freezeBoost = false;
       }
 
       function trimEffectsForPerformance() {
@@ -510,61 +831,86 @@
         }
       }
 
-      function applyPlayerComboMove(type) {
-        if (state.paused || state.ball.respawnTimer > 0 || state.events.freeze) {
+      function applyComboMove(side, type, showCue = true) {
+        if (state.paused || state.ball.respawnTimer > 0) {
           return false;
         }
 
-        const side = "left";
-        const paddle = state.player;
-        const attachedToPlayer = state.ball.sticky.attachedTo === "player";
+        const isLeft = side === "left";
+        const paddle = isLeft ? state.player : state.ai;
+        const attachedToThis = state.ball.sticky.attachedTo === (isLeft ? "player" : "ai");
 
-        if (!attachedToPlayer && !isBallCloseToPaddle(paddle, side)) {
+        if (!attachedToThis && !isBallCloseToPaddle(paddle, side)) {
           return false;
         }
 
-        const travelDir = 1;
+        const travelDir = sideToTravelDir(side);
         const currentSpeed = Math.hypot(state.ball.vx, state.ball.vy);
-        const comboSpeed = clamp(currentSpeed + 340, 660, state.ball.maxSpeed + 280);
+        const shotPower = getPrismShotPower(side);
+        const comboSpeed = clamp((currentSpeed + 430) * shotPower, 760, state.ball.maxSpeed + 420);
 
-        if (attachedToPlayer) {
+        if (attachedToThis) {
           const releaseDir = type === "burstUp" ? -1 : 1;
           releaseStickyBall(releaseDir, false);
         }
 
         if (type === "wave") {
-          state.ball.vx = travelDir * comboSpeed * 0.94;
+          state.ball.vx = travelDir * comboSpeed * 0.95;
           state.ball.vy = 0;
           state.ball.combo.mode = "wave";
-          state.ball.combo.timer = 420;
-          state.ball.combo.duration = 420;
-          state.ball.combo.baseVy = clamp((state.player.y - state.player.lastY) * 7, -120, 120);
+          state.ball.combo.timer = 760;
+          state.ball.combo.duration = 760;
+          state.ball.combo.baseVy = clamp((paddle.y - paddle.lastY) * 8, -200, 200);
           state.ball.combo.travelDir = travelDir;
           state.ball.combo.speed = Math.abs(state.ball.vx);
           state.ball.combo.vfxTick = 0;
+          state.ball.combo.owner = side;
+          state.ball.combo.freezeBoost = !!state.events.freeze;
           triggerPaddleFlick(paddle, -1);
-          showToast("Combo: Prism Zigzag");
+          spawnFlickTrail(side, -1);
+          spawnFlickTrail(side, 1);
+          if (showCue) {
+            showToast(getSideLabel(side) + " Combo: Prism Zigzag");
+          }
           playSfx("combo_wave");
         } else {
           const burstDir = type === "burstUp" ? -1 : 1;
-          const burstSpeed = clamp(comboSpeed * 0.9, 760, state.ball.maxSpeed + 320);
-          state.ball.vx = travelDir * burstSpeed * 0.84;
+          const burstSpeed = clamp(comboSpeed * 0.94, 860, state.ball.maxSpeed + 460);
+          state.ball.vx = travelDir * burstSpeed * 0.86;
           state.ball.vy = burstDir * burstSpeed;
           state.ball.combo.mode = "burst";
-          state.ball.combo.timer = 250;
-          state.ball.combo.duration = 250;
+          state.ball.combo.timer = 500;
+          state.ball.combo.duration = 500;
           state.ball.combo.baseVy = state.ball.vy;
           state.ball.combo.travelDir = travelDir;
           state.ball.combo.speed = Math.abs(state.ball.vx);
           state.ball.combo.vfxTick = 0;
+          state.ball.combo.owner = side;
+          state.ball.combo.freezeBoost = !!state.events.freeze;
           triggerPaddleFlick(paddle, burstDir);
-          showToast(type === "burstDown" ? "Combo: Down Burst" : "Combo: Up Burst");
+          spawnFlickTrail(side, burstDir);
+          if (showCue) {
+            const label = burstDir > 0 ? "Down Burst" : "Up Burst";
+            showToast(getSideLabel(side) + " Combo: " + label);
+          }
           playSfx("combo_burst");
         }
 
-        state.ball.x = paddle.x + paddle.width + state.ball.radius + 2;
-        state.shake = Math.max(state.shake, 11);
-        state.vfx.screenTint = Math.max(state.vfx.screenTint, 0.22);
+        if (isLeft) {
+          state.ball.x = paddle.x + paddle.width + state.ball.radius + 2;
+        } else {
+          state.ball.x = paddle.x - state.ball.radius - 2;
+        }
+
+        state.ball.lastTouch = side;
+        if (state.ball.charge.active && state.ball.charge.owner !== side) {
+          clearBallCharge();
+        }
+
+        addPrism(side, 9, false);
+        state.shake = Math.max(state.shake, 14);
+        state.flash = Math.max(state.flash, 0.12);
+        state.vfx.screenTint = Math.max(state.vfx.screenTint, 0.32);
         state.vfx.tintHue = state.hue % 360;
 
         spawnComboRainbowVfx(
@@ -572,10 +918,14 @@
           state.ball.y,
           travelDir,
           Math.sign(state.ball.vy) || 1,
-          1.35
+          1.85
         );
 
         return true;
+      }
+
+      function applyPlayerComboMove(type) {
+        return applyComboMove("left", type, true);
       }
 
       function trackPlayerComboInput(key) {
@@ -586,7 +936,7 @@
         while (combo.inputs.length && now - combo.inputs[0].at > combo.windowMs) {
           combo.inputs.shift();
         }
-        while (combo.inputs.length > 4) {
+        while (combo.inputs.length > 10) {
           combo.inputs.shift();
         }
 
@@ -594,23 +944,26 @@
           return;
         }
 
-        const sequence = combo.inputs.map((entry) => entry.key).join("");
+        const sequence = combo.inputs.slice(-4).map((entry) => entry.key).join("");
         let recognized = false;
-        let activated = false;
+
         if (sequence === "adda") {
           recognized = true;
-          activated = applyPlayerComboMove("wave");
+          queueCombo("left", "wave", "Prism Zigzag");
         } else if (sequence === "addd") {
           recognized = true;
-          activated = applyPlayerComboMove("burstDown");
+          queueCombo("left", "burstDown", "Down Burst");
         } else if (sequence === "daaa") {
           recognized = true;
-          activated = applyPlayerComboMove("burstUp");
+          queueCombo("left", "burstUp", "Up Burst");
         }
 
-        if (recognized || activated) {
-          combo.inputs.length = 0;
+        if (!recognized) {
+          return;
         }
+
+        combo.inputs.length = 0;
+        tryApplyBufferedCombo("left", true);
       }
 
       function weightedEventPick() {
@@ -626,7 +979,13 @@
       }
 
       function scheduleNextEvent(now) {
-        state.events.nextAt = now + rand(6500, 14000);
+        const config = getModeConfig();
+        if (!config.eventsEnabled) {
+          state.events.nextAt = Number.POSITIVE_INFINITY;
+          return;
+        }
+
+        state.events.nextAt = now + rand(config.eventMinMs, config.eventMaxMs);
       }
 
       function showToast(message) {
@@ -638,24 +997,74 @@
         }, 2200);
       }
 
+      function syncPrismMeters() {
+        const left = state.prism.left;
+        const right = state.prism.right;
+
+        const leftPct = clamp((left.value / PRISM_METER_MAX) * 100, 0, 100);
+        const rightPct = clamp((right.value / PRISM_METER_MAX) * 100, 0, 100);
+
+        prismMeterLeftFill.style.height = leftPct + "%";
+        prismMeterRightFill.style.height = rightPct + "%";
+
+        prismRightLabel.textContent = state.settings.aiEnabled ? "AI" : "P2";
+
+        prismLeft.classList.toggle("overexpose", left.overexposeTimer > 0);
+        prismRight.classList.toggle("overexpose", right.overexposeTimer > 0);
+        prismLeft.classList.toggle("shatter", left.shatterTimer > 0);
+        prismRight.classList.toggle("shatter", right.shatterTimer > 0);
+
+        prismMeterLeftText.textContent = left.overexposeTimer > 0
+          ? "x" + getPrismScoreMultiplier("left").toFixed(2)
+          : Math.round(leftPct) + "%";
+
+        prismMeterRightText.textContent = right.overexposeTimer > 0
+          ? "x" + getPrismScoreMultiplier("right").toFixed(2)
+          : Math.round(rightPct) + "%";
+      }
+
       function syncHud() {
-        pointsValue.textContent = String(state.score.points);
-        missesValue.textContent = String(state.score.misses);
-        streakValue.textContent = String(state.score.streak);
-        modeBadge.textContent = state.settings.aiEnabled ? "Opponent: AI" : "Opponent: Player 2";
+        const mode = getModeConfig();
+
+        if (state.settings.aiEnabled) {
+          pointsLabel.textContent = "Points";
+          missesLabel.textContent = "Misses";
+          streakLabel.textContent = "Streak";
+          pointsValue.textContent = String(state.score.points);
+          missesValue.textContent = String(state.score.misses);
+          streakValue.textContent = String(state.score.streak);
+        } else {
+          pointsLabel.textContent = "Player 1";
+          missesLabel.textContent = "Player 2";
+          streakLabel.textContent = "Rally";
+          pointsValue.textContent = String(state.score.player1);
+          missesValue.textContent = String(state.score.player2);
+          streakValue.textContent = String(state.score.streak);
+        }
+
+        modeBadge.textContent = mode.label + " • Opponent: " + (state.settings.aiEnabled ? "AI" : "Player 2");
+        syncPrismMeters();
 
         if (!state.events.active) {
-          eventValue.textContent = "None active";
-          eventValue.style.color = "var(--text-main)";
+          if (mode.survival) {
+            eventValue.textContent = "Survival " + formatTimeMs(state.survival.elapsedMs) + " • Lv " + (state.survival.level + 1);
+            eventValue.style.color = "#ffe7a2";
+          } else if (!mode.eventsEnabled) {
+            eventValue.textContent = "Duel Mode: events off";
+            eventValue.style.color = "#c9dcff";
+          } else {
+            eventValue.textContent = "None active";
+            eventValue.style.color = "var(--text-main)";
+          }
           return;
         }
 
         const now = state.paused && state.pauseStartedAt ? state.pauseStartedAt : performance.now();
         const remaining = Math.max(0, (state.events.endsAt - now) / 1000);
-        eventValue.textContent = `${eventCatalog[state.events.active].label} (${remaining.toFixed(1)}s)`;
+        eventValue.textContent = eventCatalog[state.events.active].label + " (" + remaining.toFixed(1) + "s)";
 
         if (state.events.rainbow) {
-          eventValue.style.color = `hsl(${state.hue % 360} 100% 72%)`;
+          eventValue.style.color = hslColor(state.hue % 360, 100, 72);
         } else if (state.events.freeze) {
           eventValue.style.color = "#9ad8ff";
         } else if (state.events.sticky) {
@@ -728,6 +1137,18 @@
       }
 
       function maybeTriggerEvent(now) {
+        const mode = getModeConfig();
+
+        if (!mode.eventsEnabled) {
+          if (state.events.active) {
+            clearEffects();
+            state.events.active = null;
+            state.events.endsAt = 0;
+          }
+          state.events.nextAt = Number.POSITIVE_INFINITY;
+          return;
+        }
+
         if (state.events.active) {
           if (now >= state.events.endsAt) {
             endCurrentEvent(now);
@@ -774,15 +1195,17 @@
           return;
         }
 
-        const direction = target === "player" ? 1 : -1;
+        const side = target === "player" ? "left" : "right";
+        const direction = sideToTravelDir(side);
         const source = target === "player" ? state.player : state.ai;
         const delta = source.y - source.lastY;
+        const power = getPrismShotPower(side);
 
-        state.ball.vx = direction * clamp(Math.abs(state.ball.vx) + 80, 320, state.ball.maxSpeed);
+        state.ball.vx = direction * clamp((Math.abs(state.ball.vx) + 80) * power, 320, state.ball.maxSpeed + 160);
 
         if (flickDir !== 0) {
-          state.ball.vx = direction * clamp(Math.abs(state.ball.vx) + 160, 460, state.ball.maxSpeed + 150);
-          state.ball.vy = clamp(flickDir * (Math.abs(state.ball.vy) + 440), -980, 980);
+          state.ball.vx = direction * clamp((Math.abs(state.ball.vx) + 160) * power, 460, state.ball.maxSpeed + 210);
+          state.ball.vy = clamp(flickDir * (Math.abs(state.ball.vy) + 440) * power, -980, 980);
           playSfx(flickDir < 0 ? "flick_up" : "flick_down");
         } else {
           state.ball.vy = clamp(delta * 14 + rand(-150, 150), -520, 520);
@@ -794,6 +1217,11 @@
 
         state.ball.sticky.attachedTo = null;
         state.ball.sticky.timer = 0;
+        state.ball.lastTouch = side;
+
+        if (state.ball.charge.active && state.ball.charge.owner !== side) {
+          clearBallCharge();
+        }
 
         if (!autoRelease || flickDir !== 0) {
           playSfx("sticky_release");
@@ -811,17 +1239,27 @@
         triggerPaddleFlick(paddle, dirSign);
         spawnFlickTrail(side, dirSign);
 
+        const closeNow = isBallCloseToPaddle(paddle, side);
+        if (closeNow || attachedToThis) {
+          if (side === "left") {
+            state.flick.leftLastAt = performance.now();
+          } else {
+            state.flick.rightLastAt = performance.now();
+          }
+        }
+
         if (attachedToThis) {
           releaseStickyBall(dirSign, false);
           return;
         }
 
-        if (state.events.freeze || !isBallCloseToPaddle(paddle, side)) {
+        if (!closeNow) {
           return;
         }
 
-        const travelDir = side === "left" ? 1 : -1;
-        const flickSpeed = clamp(Math.hypot(state.ball.vx, state.ball.vy) + 220, 420, state.ball.maxSpeed + 180);
+        const travelDir = sideToTravelDir(side);
+        const shotPower = getPrismShotPower(side);
+        const flickSpeed = clamp((Math.hypot(state.ball.vx, state.ball.vy) + 220) * shotPower, 420, state.ball.maxSpeed + 220);
 
         state.ball.vx = travelDir * flickSpeed * 0.82;
         state.ball.vy = clamp(dirSign * flickSpeed, -980, 980);
@@ -832,6 +1270,12 @@
           state.ball.x = paddle.x - state.ball.radius - 1;
         }
 
+        state.ball.lastTouch = side;
+        if (state.ball.charge.active && state.ball.charge.owner !== side) {
+          clearBallCharge();
+        }
+
+        addPrism(side, 2, false);
         state.shake = Math.max(state.shake, 7);
         playSfx(dirSign < 0 ? "flick_up" : "flick_down");
       }
@@ -847,32 +1291,46 @@
         playSfx("sticky_attach");
       }
 
-      function registerPlayerReturn() {
-        const gain = state.events.rainbow ? 2 : 1;
-        state.score.points += gain;
+      function registerReturn(side) {
         state.score.streak += 1;
+        addPrism(side, state.events.freeze ? 8 : 6, false);
+
+        if (!state.settings.aiEnabled || side !== "left") {
+          return;
+        }
+
+        const base = state.events.rainbow ? 2 : 1;
+        const gain = scoreWithPrism(base, "left", true);
+        state.score.points += gain;
+
         if (state.events.rainbow && state.score.misses > 0) {
           state.score.misses -= 1;
         }
       }
 
       function respawnBall(direction) {
+        refreshBallMaxSpeed();
+
         state.ball.x = state.width * 0.5;
         state.ball.y = state.height * 0.5;
-        const speed = 340;
+        const speed = 340 * getSurvivalSpeedMultiplier();
         state.ball.vx = direction * speed;
         state.ball.vy = rand(-180, 180);
         state.ball.respawnTimer = 700;
         state.ball.sticky.attachedTo = null;
         state.ball.sticky.timer = 0;
         state.ball.trail.length = 0;
+        state.ball.lastTouch = null;
         clearBallCombo();
+        clearBallCharge();
       }
 
       function resetMatch() {
         state.score.points = 0;
         state.score.misses = 0;
         state.score.streak = 0;
+        state.score.player1 = 0;
+        state.score.player2 = 0;
         state.flash = 0;
         state.shake = 0;
 
@@ -885,9 +1343,20 @@
         state.ai.height = state.ai.baseHeight;
         state.player.y = state.height * 0.5 - state.player.height * 0.5;
         state.ai.y = state.height * 0.5 - state.ai.height * 0.5;
+        state.player.speed = state.player.baseSpeed;
+        state.ai.speed = state.ai.baseSpeed;
+        state.ai.manualSpeed = state.ai.baseManualSpeed;
 
         state.player.flickTimer = 0;
         state.ai.flickTimer = 0;
+        state.ai.actionCooldownUntil = 0;
+
+        state.prism.left.value = 0;
+        state.prism.left.overexposeTimer = 0;
+        state.prism.left.shatterTimer = 0;
+        state.prism.right.value = 0;
+        state.prism.right.overexposeTimer = 0;
+        state.prism.right.shatterTimer = 0;
 
         state.vfx.particles.length = 0;
         state.vfx.shockwaves.length = 0;
@@ -895,6 +1364,11 @@
         state.vfx.screenTint = 0;
         state.vfx.scorePulse = 0;
         state.combo.inputs.length = 0;
+        state.combo.pending.left = null;
+        state.combo.pending.right = null;
+
+        state.flick.leftLastAt = -1;
+        state.flick.rightLastAt = -1;
 
         state.runtime.frameMsEMA = 16.7;
         state.runtime.lagDetected = false;
@@ -903,6 +1377,8 @@
         state.runtime.vfxLimiter.budgetFrameId = -1;
         state.runtime.vfxLimiter.generalBudget = 0;
         state.runtime.vfxLimiter.flickBudget = 0;
+
+        resetSurvivalState();
 
         state.ball.radius = state.ball.baseRadius;
         respawnBall(Math.random() > 0.5 ? 1 : -1);
@@ -937,6 +1413,8 @@
       function updatePlayer(dt) {
         state.player.lastY = state.player.y;
 
+        const moveSpeed = state.player.baseSpeed * getOpponentSlowFactor("left");
+
         if (state.settings.pointerAssist && state.input.pointerActive && state.input.pointerY !== null) {
           const targetY = clamp(state.input.pointerY - state.player.height * 0.5, 0, state.height - state.player.height);
           const followRate = clamp(dt * 12, 0, 1);
@@ -944,35 +1422,121 @@
         }
 
         if (state.input.p1Up) {
-          state.player.y -= state.player.speed * dt;
+          state.player.y -= moveSpeed * dt;
         }
         if (state.input.p1Down) {
-          state.player.y += state.player.speed * dt;
+          state.player.y += moveSpeed * dt;
         }
 
         state.player.y = clamp(state.player.y, 0, state.height - state.player.height);
       }
 
-      function updateAi(dt) {
-        state.ai.lastY = state.ai.y;
-        const center = state.ai.y + state.ai.height * 0.5;
-        const lead = clamp((state.ball.x - state.width * 0.6) / (state.width * 0.4), 0, 1);
-        const target = state.ball.y + state.ball.vy * 0.05 * lead;
-        const direction = target > center ? 1 : -1;
+      function projectBallYAtTime(y, vy, timeSec) {
+        if (timeSec <= 0) {
+          return y;
+        }
 
-        state.ai.y += direction * state.ai.speed * dt * (0.5 + lead * 0.85);
-        state.ai.y += rand(-18, 18) * dt;
+        const minY = state.ball.radius;
+        const maxY = state.height - state.ball.radius;
+        const span = Math.max(1, maxY - minY);
+        const period = span * 2;
+
+        let normalized = (y + vy * timeSec) - minY;
+        normalized = ((normalized % period) + period) % period;
+        if (normalized > span) {
+          normalized = period - normalized;
+        }
+
+        return minY + normalized;
+      }
+
+      function runAiShotDecision(now) {
+        if (state.paused || state.ball.respawnTimer > 0) {
+          return;
+        }
+
+        if (now < state.ai.actionCooldownUntil) {
+          return;
+        }
+
+        const stickyAttached = state.ball.sticky.attachedTo === "ai";
+        const closeToBall = isBallCloseToPaddle(state.ai, "right");
+        const incoming = state.ball.vx > 70 || stickyAttached;
+
+        if (!incoming || (!closeToBall && !stickyAttached)) {
+          return;
+        }
+
+        const centerDelta = state.ball.y - (state.ai.y + state.ai.height * 0.5);
+        const dirSign = centerDelta < -8 ? -1 : centerDelta > 8 ? 1 : (Math.random() < 0.5 ? -1 : 1);
+
+        const speed = Math.hypot(state.ball.vx, state.ball.vy);
+        const mode = getModeConfig();
+        let comboChance = state.runtime.lagDetected ? 0.14 : (speed > 560 ? 0.56 : 0.38);
+        if (state.settings.gameMode === "chaos") {
+          comboChance += 0.08;
+        }
+        if (!mode.eventsEnabled) {
+          comboChance += 0.04;
+        }
+
+        let acted = false;
+
+        if (Math.random() < comboChance) {
+          const comboType = Math.abs(centerDelta) < state.ai.height * 0.18
+            ? "wave"
+            : (dirSign < 0 ? "burstUp" : "burstDown");
+          acted = applyComboMove("right", comboType, true);
+        }
+
+        if (!acted) {
+          tryFlick("right", dirSign);
+          state.ai.actionCooldownUntil = now + rand(160, 300);
+          return;
+        }
+
+        state.ai.actionCooldownUntil = now + rand(390, 680);
+      }
+
+      function updateAi(dt) {
+        const now = performance.now();
+        state.ai.lastY = state.ai.y;
+
+        const center = state.ai.y + state.ai.height * 0.5;
+        const movingTowardAi = state.ball.vx > 20 || state.ball.sticky.attachedTo === "ai";
+
+        let targetY;
+        if (movingTowardAi && state.ball.vx > 20) {
+          const interceptX = state.ai.x - state.ball.radius - 2;
+          const timeToIntercept = (interceptX - state.ball.x) / state.ball.vx;
+          targetY = timeToIntercept > 0
+            ? projectBallYAtTime(state.ball.y, state.ball.vy, timeToIntercept)
+            : state.ball.y;
+        } else {
+          targetY = state.height * 0.5 + Math.sin(now * 0.0024) * 16;
+        }
+
+        const moveScale = movingTowardAi ? 1.12 : 0.74;
+        const aiSpeed = state.ai.baseSpeed * getOpponentSlowFactor("right");
+        const maxStep = aiSpeed * moveScale * dt;
+        const step = clamp(targetY - center, -maxStep, maxStep);
+
+        state.ai.y += step;
         state.ai.y = clamp(state.ai.y, 0, state.height - state.ai.height);
+
+        runAiShotDecision(now);
       }
 
       function updateManualP2(dt) {
         state.ai.lastY = state.ai.y;
 
+        const moveSpeed = state.ai.baseManualSpeed * getOpponentSlowFactor("right");
+
         if (state.input.p2Up) {
-          state.ai.y -= state.ai.manualSpeed * dt;
+          state.ai.y -= moveSpeed * dt;
         }
         if (state.input.p2Down) {
-          state.ai.y += state.ai.manualSpeed * dt;
+          state.ai.y += moveSpeed * dt;
         }
 
         state.ai.y = clamp(state.ai.y, 0, state.height - state.ai.height);
@@ -1025,53 +1589,99 @@
 
       function resolvePaddleBounce(paddle, side) {
         clearBallCombo();
+
         const paddleCenter = paddle.y + paddle.height * 0.5;
         const normalized = clamp((state.ball.y - paddleCenter) / (paddle.height * 0.5), -1, 1);
-        const speed = clamp(Math.hypot(state.ball.vx, state.ball.vy) + 24, 330, state.ball.maxSpeed);
+        const shotPower = getPrismShotPower(side);
+        const speed = clamp((Math.hypot(state.ball.vx, state.ball.vy) + 24) * shotPower, 330, state.ball.maxSpeed + 80);
 
         const horizontal = Math.cos(normalized * 0.95);
         const vertical = Math.sin(normalized * 1.15);
 
-        state.ball.vx = (side === "left" ? 1 : -1) * speed * Math.max(0.42, horizontal);
+        state.ball.vx = sideToTravelDir(side) * speed * Math.max(0.42, horizontal);
         state.ball.vy = speed * vertical + (paddle.y - paddle.lastY) * 10;
+
+        const now = performance.now();
+        const flickStamp = side === "left" ? state.flick.leftLastAt : state.flick.rightLastAt;
+        const perfectFlick = flickStamp > 0 && now - flickStamp <= PERFECT_FLICK_WINDOW_MS;
+
+        if (perfectFlick) {
+          armPerfectCharge(side);
+        } else if (state.ball.charge.active && state.ball.charge.owner !== side) {
+          clearBallCharge();
+        }
 
         if (side === "left") {
           state.ball.x = paddle.x + paddle.width + state.ball.radius;
-          registerPlayerReturn();
         } else {
           state.ball.x = paddle.x - state.ball.radius;
         }
 
+        state.ball.lastTouch = side;
+        registerReturn(side);
+
         const impactX = side === "left" ? paddle.x + paddle.width + 4 : paddle.x - 4;
-        spawnImpactVfx(impactX, state.ball.y, side === "left" ? 198 : 156, side === "left" ? 1 : -1, normalized * 0.9, 1.1);
+        spawnImpactVfx(impactX, state.ball.y, side === "left" ? 198 : 156, sideToTravelDir(side), normalized * 0.9, perfectFlick ? 1.38 : 1.1);
 
         if (state.events.sticky) {
           attachBallToPaddle(side === "left" ? "player" : "ai");
         }
 
+        addPrism(side, perfectFlick ? 12 : 7, false);
         playSfx("hit");
       }
 
       function handleScoring() {
         if (state.ball.x + state.ball.radius < 0) {
-          state.score.misses += 1;
+          const gain = scoreWithPrism(1, "right", true);
+          state.score.player2 += gain;
           state.score.streak = 0;
+          clearBallCombo();
+          clearBallCharge();
+          shatterPrism("left");
+
+          if (state.settings.aiEnabled) {
+            state.score.misses += 1;
+            if (getModeConfig().survival) {
+              const survived = formatTimeMs(state.survival.elapsedMs);
+              showToast("Missed return • survived " + survived);
+              resetSurvivalState();
+            } else {
+              showToast("Missed return");
+            }
+          } else {
+            showToast("Player 2 scored +" + gain);
+          }
+
           state.flash = 0.25;
           state.shake = 10;
           spawnGoalVfx("left");
           respawnBall(1);
-          showToast(state.settings.aiEnabled ? "Missed return" : "Player 2 scored");
           playSfx("miss");
           return;
         }
 
         if (state.ball.x - state.ball.radius > state.width) {
-          state.score.points += state.events.rainbow ? 6 : 3;
-          state.score.streak += 1;
+          const base = state.settings.aiEnabled ? (state.events.rainbow ? 6 : 3) : 1;
+          const gain = scoreWithPrism(base, "left", true);
+
+          if (state.settings.aiEnabled) {
+            state.score.points += gain;
+            state.score.player1 += 1;
+            showToast("You scored past the AI +" + gain);
+          } else {
+            state.score.player1 += gain;
+            showToast("Player 1 scored +" + gain);
+          }
+
+          state.score.streak = 0;
+          clearBallCombo();
+          clearBallCharge();
+          shatterPrism("right");
+
           state.shake = 6;
           spawnGoalVfx("right");
           respawnBall(-1);
-          showToast(state.settings.aiEnabled ? "You scored past the AI" : "Player 1 scored");
           playSfx("score");
         }
       }
@@ -1082,36 +1692,44 @@
           return;
         }
 
+        const now = performance.now();
+        pruneComboBuffers(now);
+        tryApplyBufferedCombo("left", true);
+        tryApplyBufferedCombo("right", false);
+
         if (state.ball.sticky.attachedTo) {
-          const anchor = state.ball.sticky.attachedTo === "player" ? state.player : state.ai;
-          const dir = state.ball.sticky.attachedTo === "player" ? 1 : -1;
-          state.ball.x = anchor.x + (dir === 1 ? anchor.width + state.ball.radius : -state.ball.radius);
-          state.ball.y = anchor.y + anchor.height * 0.5;
-          state.ball.sticky.timer -= dt * 1000;
-          if (state.ball.sticky.timer <= 0 || !state.events.sticky) {
-            releaseStickyBall(0, true);
+          const side = state.ball.sticky.attachedTo === "player" ? "left" : "right";
+          tryApplyBufferedCombo(side, true);
+
+          if (state.ball.sticky.attachedTo) {
+            const anchor = side === "left" ? state.player : state.ai;
+            const dir = sideToTravelDir(side);
+            state.ball.x = anchor.x + (dir === 1 ? anchor.width + state.ball.radius : -state.ball.radius);
+            state.ball.y = anchor.y + anchor.height * 0.5;
+            state.ball.sticky.timer -= dt * 1000;
+            if (state.ball.sticky.timer <= 0 || !state.events.sticky) {
+              releaseStickyBall(0, true);
+            }
+            return;
           }
-          return;
         }
 
-        if (state.events.freeze) {
-          return;
-        }
+        const ballDt = dt * (state.events.freeze ? FREEZE_SLOW_FACTOR : 1);
 
         if (state.ball.combo.mode) {
           const combo = state.ball.combo;
-          combo.timer -= dt * 1000;
+          combo.timer -= ballDt * 1000;
 
           if (combo.timer <= 0) {
             clearBallCombo();
           } else {
             if (combo.mode === "wave") {
               const progress = 1 - combo.timer / combo.duration;
-              const wave = Math.sin(progress * Math.PI * 2.35 - Math.PI / 2);
-              state.ball.vy = clamp(combo.baseVy + wave * 760, -1040, 1040);
+              const wave = Math.sin(progress * Math.PI * 2.9 - Math.PI / 2);
+              state.ball.vy = clamp(combo.baseVy + wave * 940, -1260, 1260);
             } else {
-              const minBurstVy = Math.abs(combo.baseVy) * 0.78;
-              state.ball.vy *= Math.pow(0.985, dt * 60);
+              const minBurstVy = Math.abs(combo.baseVy) * 0.9;
+              state.ball.vy *= Math.pow(0.992, ballDt * 60);
               if (Math.abs(state.ball.vy) < minBurstVy) {
                 state.ball.vy = Math.sign(combo.baseVy || 1) * minBurstVy;
               }
@@ -1119,27 +1737,41 @@
 
             state.ball.vx = combo.travelDir * Math.max(Math.abs(state.ball.vx), combo.speed);
 
-            combo.vfxTick -= dt * 1000;
+            combo.vfxTick -= ballDt * 1000;
             if (combo.vfxTick <= 0) {
-              combo.vfxTick = getPerformanceTier() === 0 ? 24 : 42;
+              combo.vfxTick = getPerformanceTier() === 0 ? 14 : 26;
               spawnComboRainbowVfx(
                 state.ball.x,
                 state.ball.y,
                 combo.travelDir,
                 Math.sign(state.ball.vy) || 1,
-                0.65
+                combo.freezeBoost ? 1.18 : 1.05
               );
             }
           }
         }
 
-        state.ball.x += state.ball.vx * dt;
-        state.ball.y += state.ball.vy * dt;
+        state.ball.x += state.ball.vx * ballDt;
+        state.ball.y += state.ball.vy * ballDt;
 
         const tier = getPerformanceTier();
         const trailSpawnChance = tier === 2 ? 0.34 : tier === 1 ? 0.72 : 1;
         if (Math.random() <= trailSpawnChance) {
-          state.ball.trail.push({ x: state.ball.x, y: state.ball.y, r: state.ball.radius, a: tier === 2 ? 0.19 : tier === 1 ? 0.24 : 0.28 });
+          const owner = state.ball.charge.active ? state.ball.charge.owner : state.ball.lastTouch;
+          const ownerOverexposed = owner && state.prism[owner].overexposeTimer > 0;
+          const trailHue = state.ball.charge.active
+            ? 42 + rand(-10, 10)
+            : ownerOverexposed
+              ? (owner === "left" ? 194 + rand(-12, 12) : 148 + rand(-12, 12))
+              : null;
+
+          state.ball.trail.push({
+            x: state.ball.x,
+            y: state.ball.y,
+            r: state.ball.radius,
+            a: tier === 2 ? 0.19 : tier === 1 ? 0.24 : 0.28,
+            hue: trailHue
+          });
         }
 
         const trailLimit = getTrailLimit();
@@ -1179,8 +1811,34 @@
           state.ai.flickTimer = Math.max(0, state.ai.flickTimer - dt * 1000);
         }
 
+        if (state.ball.charge.active) {
+          state.ball.charge.timer -= dt * 1000;
+          if (state.ball.charge.timer <= 0) {
+            clearBallCharge();
+          }
+        }
+
+        for (const side of ["left", "right"]) {
+          const meter = state.prism[side];
+
+          if (meter.overexposeTimer > 0) {
+            meter.overexposeTimer = Math.max(0, meter.overexposeTimer - dt * 1000);
+            meter.value = PRISM_METER_MAX;
+            if (meter.overexposeTimer <= 0) {
+              meter.value = PRISM_METER_MAX * 0.36;
+              showToast(getSideLabel(side) + " Overexpose faded");
+              playSfx("overexpose_end");
+            }
+          }
+
+          if (meter.shatterTimer > 0) {
+            meter.shatterTimer = Math.max(0, meter.shatterTimer - dt * 1000);
+          }
+        }
+
         for (const trail of state.ball.trail) {
-          trail.a = Math.max(0, trail.a - dt * 0.75);
+          const fadeRate = trail.hue !== null && trail.hue !== undefined ? 0.58 : 0.75;
+          trail.a = Math.max(0, trail.a - dt * fadeRate);
         }
 
         for (let i = state.vfx.particles.length - 1; i >= 0; i -= 1) {
@@ -1343,21 +2001,41 @@
       function drawBall() {
         const tier = getPerformanceTier();
         const trailStep = tier === 2 ? 3 : tier === 1 ? 2 : 1;
+
         for (let i = 0; i < state.ball.trail.length; i += trailStep) {
           const trail = state.ball.trail[i];
           if (trail.a <= 0) {
             continue;
           }
+
           ctx.beginPath();
-          ctx.fillStyle = state.events.rainbow
-            ? `hsla(${(state.hue - trail.r * 8) % 360} 100% 66% / ${trail.a})`
-            : `rgba(194, 228, 255, ${trail.a})`;
+          if (trail.hue !== null && trail.hue !== undefined) {
+            ctx.fillStyle = hslColor(trail.hue, 100, 70, trail.a);
+          } else if (state.events.rainbow) {
+            ctx.fillStyle = hslColor((state.hue - trail.r * 8) % 360, 100, 66, trail.a);
+          } else {
+            ctx.fillStyle = "rgba(194, 228, 255, " + trail.a + ")";
+          }
+
           ctx.arc(trail.x, trail.y, trail.r * 0.95, 0, Math.PI * 2);
           ctx.fill();
         }
 
         ctx.beginPath();
-        if (state.events.rainbow) {
+        if (state.ball.charge.active) {
+          const chargeGrad = ctx.createRadialGradient(
+            state.ball.x - 3,
+            state.ball.y - 4,
+            1,
+            state.ball.x,
+            state.ball.y,
+            state.ball.radius + 3
+          );
+          chargeGrad.addColorStop(0, "hsl(50 100% 84%)");
+          chargeGrad.addColorStop(0.55, "hsl(37 100% 66%)");
+          chargeGrad.addColorStop(1, "hsl(17 100% 56%)");
+          ctx.fillStyle = chargeGrad;
+        } else if (state.events.rainbow) {
           const ballGrad = ctx.createRadialGradient(
             state.ball.x - 4,
             state.ball.y - 6,
@@ -1366,9 +2044,9 @@
             state.ball.y,
             state.ball.radius + 2
           );
-          ballGrad.addColorStop(0, `hsl(${(state.hue + 25) % 360} 100% 80%)`);
-          ballGrad.addColorStop(0.5, `hsl(${(state.hue + 155) % 360} 100% 68%)`);
-          ballGrad.addColorStop(1, `hsl(${(state.hue + 295) % 360} 100% 58%)`);
+          ballGrad.addColorStop(0, hslColor((state.hue + 25) % 360, 100, 80));
+          ballGrad.addColorStop(0.5, hslColor((state.hue + 155) % 360, 100, 68));
+          ballGrad.addColorStop(1, hslColor((state.hue + 295) % 360, 100, 58));
           ctx.fillStyle = ballGrad;
         } else if (state.events.freeze) {
           ctx.fillStyle = "#9edcff";
@@ -1376,11 +2054,26 @@
           ctx.fillStyle = "#f3f8ff";
         }
 
-        ctx.shadowColor = state.events.rainbow ? `hsl(${state.hue % 360} 100% 68%)` : "rgba(186, 220, 255, 0.9)";
+        if (state.ball.charge.active) {
+          ctx.shadowColor = "rgba(255, 208, 96, 0.96)";
+        } else if (state.events.rainbow) {
+          ctx.shadowColor = hslColor(state.hue % 360, 100, 68);
+        } else {
+          ctx.shadowColor = "rgba(186, 220, 255, 0.9)";
+        }
+
         ctx.shadowBlur = tier === 0 ? 16 : 0;
         ctx.arc(state.ball.x, state.ball.y, state.ball.radius, 0, Math.PI * 2);
         ctx.fill();
         ctx.shadowBlur = 0;
+
+        if (state.ball.charge.active) {
+          ctx.strokeStyle = "rgba(255, 224, 126, 0.78)";
+          ctx.lineWidth = 2.2;
+          ctx.beginPath();
+          ctx.arc(state.ball.x, state.ball.y, state.ball.radius + 5, 0, Math.PI * 2);
+          ctx.stroke();
+        }
 
         if (state.events.freeze) {
           ctx.strokeStyle = "rgba(191, 236, 255, 0.5)";
@@ -1654,6 +2347,38 @@
           return;
         }
 
+        if (kind === "perfect_flick") {
+          playTone(760, 0.05, "triangle", 0.17);
+          playTone(980, 0.07, "sine", 0.12);
+          playTone(1220, 0.09, "triangle", 0.1);
+          return;
+        }
+
+        if (kind === "overexpose_start") {
+          playTone(420, 0.08, "triangle", 0.18);
+          playTone(640, 0.11, "sine", 0.13);
+          playTone(860, 0.14, "triangle", 0.1);
+          return;
+        }
+
+        if (kind === "overexpose_end") {
+          playTone(740, 0.06, "sine", 0.1);
+          playTone(520, 0.09, "triangle", 0.08);
+          return;
+        }
+
+        if (kind === "meter_shatter") {
+          playTone(300, 0.08, "sawtooth", 0.15);
+          playTone(180, 0.12, "triangle", 0.1);
+          return;
+        }
+
+        if (kind === "survival_ramp") {
+          playTone(510, 0.08, "triangle", 0.13);
+          playTone(690, 0.1, "sine", 0.09);
+          return;
+        }
+
         if (kind === "menu_open") {
           playTone(350, 0.07, "triangle", 0.1);
           playTone(470, 0.08, "sine", 0.07);
@@ -1773,6 +2498,44 @@
         }
       }
 
+      function setGameMode(mode, announce = true) {
+        const nextMode = GAME_MODES[mode] ? mode : "classic";
+        const previousMode = state.settings.gameMode;
+        state.settings.gameMode = nextMode;
+
+        if (previousMode !== nextMode) {
+          state.combo.inputs.length = 0;
+          state.combo.pending.left = null;
+          state.combo.pending.right = null;
+          clearBallCombo();
+          clearBallCharge();
+        }
+
+        if (!getModeConfig().eventsEnabled) {
+          clearEffects();
+          state.events.active = null;
+          state.events.endsAt = 0;
+          state.events.nextAt = Number.POSITIVE_INFINITY;
+        } else {
+          scheduleNextEvent(performance.now() + 1400);
+        }
+
+        if (getModeConfig().survival) {
+          resetSurvivalState();
+        } else {
+          state.survival.elapsedMs = 0;
+          state.survival.nextRampMs = 10000;
+          state.survival.level = 0;
+          refreshBallMaxSpeed();
+        }
+
+        if (announce && previousMode !== nextMode) {
+          showToast("Mode: " + getModeConfig().label);
+        }
+
+        syncHud();
+      }
+
       function syncSettingsUi() {
         aiToggle.checked = state.settings.aiEnabled;
         manualBlock.classList.toggle("active", !state.settings.aiEnabled);
@@ -1781,6 +2544,7 @@
         perfToggle.checked = state.settings.performanceMode;
         ultraPerfToggle.checked = state.settings.ultraPerformanceMode;
         pointerAssistToggle.checked = state.settings.pointerAssist;
+        gameModeSelect.value = state.settings.gameMode;
         document.body.classList.toggle("perf-mode", state.settings.performanceMode);
         document.body.classList.toggle("ultra-perf", state.settings.ultraPerformanceMode);
       }
@@ -1796,6 +2560,7 @@
 
         if (!state.paused) {
           maybeTriggerEvent(now);
+          updateSurvivalRamp(dt);
           updatePlayer(dt);
           updateSecondPaddle(dt);
           updateBall(dt);
@@ -1997,6 +2762,7 @@
         state.input.p2Up = false;
         state.input.p2Down = false;
         manualBlock.classList.toggle("active", !state.settings.aiEnabled);
+        syncHud();
         showToast(state.settings.aiEnabled ? "AI opponent enabled" : "Local 2-player enabled");
       });
 
@@ -2022,6 +2788,10 @@
         state.settings.musicVolume = Number(musicVolume.value);
       });
 
+      gameModeSelect.addEventListener("change", () => {
+        setGameMode(gameModeSelect.value, true);
+      });
+
       perfToggle.addEventListener("change", () => {
         state.settings.performanceMode = perfToggle.checked;
         if (!state.settings.performanceMode) {
@@ -2045,9 +2815,9 @@
       });
 
       resize();
+      setGameMode(state.settings.gameMode, false);
       syncSettingsUi();
       activateTab("musicTab");
       resetMatch();
-      scheduleNextEvent(performance.now() + 2000);
       requestAnimationFrame(tick);
     })();

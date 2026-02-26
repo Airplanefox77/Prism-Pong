@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Prism Pong</title>
-    <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <div class="orb orb-1"></div>
@@ -13,15 +13,15 @@
   <main class="shell">
     <section class="hud">
       <article class="stat">
-        <span class="label">Points</span>
+        <span class="label" id="pointsLabel">Points</span>
         <strong class="value" id="pointsValue">0</strong>
       </article>
       <article class="stat">
-        <span class="label">Misses</span>
+        <span class="label" id="missesLabel">Misses</span>
         <strong class="value" id="missesValue">0</strong>
       </article>
       <article class="stat">
-        <span class="label">Streak</span>
+        <span class="label" id="streakLabel">Streak</span>
         <strong class="value" id="streakValue">0</strong>
       </article>
       <article class="stat">
@@ -32,6 +32,7 @@
 
     <section class="board-wrap">
       <canvas id="pong" aria-label="Prism Pong Game"></canvas>
+
       <div id="eventToast" class="toast"></div>
 
       <div id="pauseLayer" class="pause-layer" aria-hidden="true">
@@ -55,6 +56,16 @@
             </div>
 
             <section class="tab-panel active" id="musicTab" role="tabpanel">
+              <label class="setting-line" for="gameModeSelect">
+                <span>Game Mode</span>
+                <select id="gameModeSelect" class="select-input">
+                  <option value="classic">Classic Prism</option>
+                  <option value="chaos">Arcade Chaos</option>
+                  <option value="duel">Duel Mode</option>
+                  <option value="survival">Light Survival</option>
+                </select>
+              </label>
+              <p class="setting-note">Classic: balanced events. Chaos: faster events. Duel: no random events. Survival: speed ramps every 10s.</p>
               <label class="setting-line" for="musicToggle">
                 <span>Music Enabled</span>
                 <input id="musicToggle" class="toggle" type="checkbox" checked />
@@ -124,6 +135,23 @@
       </div>
     </section>
 
+      <div class="prism-meters" aria-hidden="true">
+        <aside id="prismLeft" class="prism-meter left">
+          <span class="prism-side-label">P1</span>
+          <div class="prism-track">
+            <div id="prismMeterLeftFill" class="prism-fill"></div>
+          </div>
+          <span id="prismMeterLeftText" class="prism-meter-text">0%</span>
+        </aside>
+        <aside id="prismRight" class="prism-meter right">
+          <span id="prismRightLabel" class="prism-side-label">AI</span>
+          <div class="prism-track">
+            <div id="prismMeterRightFill" class="prism-fill"></div>
+          </div>
+          <span id="prismMeterRightText" class="prism-meter-text">0%</span>
+        </aside>
+      </div>
+
     <section class="toolbar">
       <p class="hint">P1: W/S + A/D flick + combos (ADDA, ADDD, DAAA). P2: arrows when AI off + Left/Right flick. Esc opens pause menu.</p>
       <div class="toolbar-right">
@@ -133,6 +161,6 @@
     </section>
   </main>
 
-    <script src="game.js"></script>
+  <script src="game.js"></script>
 </body>
 </html>
