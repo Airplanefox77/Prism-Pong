@@ -313,7 +313,7 @@ button:hover,
 }
 
 .pause-layer {
-  position: absolute;
+  position: fixed;
   inset: 0;
   display: grid;
   place-items: center;
@@ -324,7 +324,7 @@ button:hover,
   backdrop-filter: blur(0px);
   -webkit-backdrop-filter: blur(0px);
   transition: opacity 0.32s ease, backdrop-filter 0.42s ease, background 0.32s ease;
-  z-index: 4;
+  z-index: 920;
 }
 
 .pause-layer.open {
@@ -336,7 +336,9 @@ button:hover,
 }
 
 .pause-card {
-  width: min(660px, 96%);
+  width: min(700px, calc(100vw - 28px));
+  max-height: calc(100vh - 44px);
+  overflow-y: auto;
   border-radius: 18px;
   border: 1px solid rgba(255, 255, 255, 0.26);
   background: linear-gradient(150deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.08));

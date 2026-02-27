@@ -147,7 +147,10 @@
         },
         combo: {
           windowMs: PLAYER_COMBO_WINDOW_MS,
-          inputs: [],
+          inputs: {
+            left: [],
+            right: []
+          },
           pending: {
             left: null,
             right: null
@@ -181,7 +184,9 @@
           actionCooldownUntil: 0,
           aimOffset: 0,
           aimRefreshAt: 0,
-          confusedUntil: 0
+          confusedUntil: 0,
+          trackedY: 0,
+          trackRefreshAt: 0
         },
         ball: {
           x: 480,
@@ -252,7 +257,12 @@
           ctx: null,
           unlocked: false,
           nextBeatAt: 0,
-          beatStep: 0
+          beatStep: 0,
+          routingReady: false,
+          masterGain: null,
+          musicGainNode: null,
+          sfxGainNode: null,
+          musicFilter: null
         },
         scoreLog: {
           recent: [],
@@ -305,7 +315,9 @@
             aimOffset: 0,
             aimRefreshAt: 0,
             actionCooldownUntil: 0,
-            confusedUntil: 0
+            confusedUntil: 0,
+            trackedY: 0,
+            trackRefreshAt: 0
           }
         },
         runtime: {
@@ -1259,6 +1271,10 @@
             state.cheats.leftAi.aimRefreshAt = 0;
             state.cheats.leftAi.actionCooldownUntil = 0;
             state.cheats.leftAi.confusedUntil = 0;
+            state.cheats.leftAi.trackRefreshAt = 0;
+            state.cheats.leftAi.trackedY = state.height * 0.5;
+            state.ai.trackRefreshAt = 0;
+            state.ai.trackedY = state.height * 0.5;
             state.ai.confusedUntil = 0;
             state.runtime.aiAdaptiveBias = 0;
             clearMovementInput();
@@ -1584,7 +1600,7 @@
           return;
         }
 
-        const confuseChance = lerp(0.24, 0.06, difficulty);
+        const confuseChance = lerp(0.28, 0.004, difficulty);
         if (Math.random() < confuseChance) {
           brain.confusedUntil = now + rand(260, 680);
           brain.aimOffset += rand(-220, 220);
@@ -1971,6 +1987,69 @@
         }
       }
 
+      function getCurrentPerformanceTier() {
+        if (state.settings.ultraPerformanceMode) {
+          return 2;
+        }
+        if (state.settings.performanceMode) {
+          return 1;
+        }
+        return 0;
+      }
+
+      function setPerformanceTier(tier, announce = false) {
+        const nextTier = clamp(Math.round(Number(tier) || 0), 0, 2);
+        const prevTier = getCurrentPerformanceTier();
+        if (nextTier === prevTier) {
+          return false;
+        }
+
+        state.settings.ultraPerformanceMode = nextTier === 2;
+        state.settings.performanceMode = nextTier >= 1;
+
+        syncSettingsUi();
+        if (nextTier > prevTier) {
+          trimEffectsForPerformance();
+        }
+        resize();
+
+        if (announce) {
+          const label = nextTier === 2 ? "Ultra Performance" : (nextTier === 1 ? "Performance" : "Visual Quality");
+          showToast("Auto Performance tuned to " + label);
+        }
+
+        return true;
+      }
+
+      function updateAutoPerformanceTier(now) {
+        if (!state.settings.autoGraphics) {
+          return;
+        }
+
+        const runtime = state.runtime;
+        const currentTier = getCurrentPerformanceTier();
+        const frameEma = runtime.frameMsEMA;
+
+        let targetTier = currentTier;
+        if (runtime.lagDetected || frameEma > 34) {
+          targetTier = 2;
+        } else if (frameEma > 23.5) {
+          targetTier = 1;
+        } else if (currentTier === 2 && frameEma < 22.2 && !runtime.lagDetected) {
+          targetTier = 1;
+        } else if (frameEma < 17.2 && !runtime.lagDetected) {
+          targetTier = 0;
+        }
+
+        if (targetTier === currentTier || now < runtime.autoPerfCooldownUntil) {
+          return;
+        }
+
+        const escalating = targetTier > currentTier;
+        runtime.autoPerfCooldownUntil = now + (escalating ? 1300 : 4300);
+        setPerformanceTier(targetTier, true);
+      }
+
       function updateLagState(frameMs, now) {
         const runtime = state.runtime;
         runtime.frameMsEMA = runtime.frameMsEMA * 0.9 + frameMs * 0.1;
@@ -1994,25 +2073,11 @@
             resize();
           }
         }
-
-        if (state.settings.autoGraphics && runtime.frameMsEMA > 31 && !state.settings.performanceMode && now > runtime.autoPerfCooldownUntil) {
-          runtime.autoPerfCooldownUntil = now + 9000;
-          state.settings.performanceMode = true;
-          state.settings.ultraPerformanceMode = false;
-          syncSettingsUi();
-          resize();
-          showToast("Auto graphics enabled Performance mode for smoother FPS");
-        }
+        updateAutoPerformanceTier(now);
       }
 
       function getPerformanceTier() {
-        if (state.settings.ultraPerformanceMode) {
-          return 2;
-        }
-        if (state.settings.performanceMode) {
-          return 1;
-        }
-        return 0;
+        return getCurrentPerformanceTier();
       }
 
       function getVfxDensity() {
@@ -2440,40 +2505,59 @@
         return applyComboMove("left", type, true);
       }
 
-      function trackPlayerComboInput(key) {
-        const now = performance.now();
-        const combo = state.combo;
-        combo.inputs.push({ key, at: now });
-
-        while (combo.inputs.length && now - combo.inputs[0].at > combo.windowMs) {
-          combo.inputs.shift();
+      function clearComboInputs(side = null) {
+        if (side) {
+          state.combo.inputs[side].length = 0;
+          return;
         }
-        while (combo.inputs.length > 10) {
-          combo.inputs.shift();
-        }
+        state.combo.inputs.left.length = 0;
+        state.combo.inputs.right.length = 0;
+      }
 
-        if (combo.inputs.length < 4) {
+      function trackComboInput(side, key) {
+        const comboInputStream = state.combo.inputs[side];
+        if (!comboInputStream) {
           return;
         }
 
-        const sequence = combo.inputs.slice(-4).map((entry) => entry.key).join("");
+        const now = performance.now();
+        const combo = state.combo;
+        const comboWindowMs = side === "right" ? combo.windowMs * 1.28 : combo.windowMs;
+        comboInputStream.push({ key, at: now });
+
+        while (comboInputStream.length && now - comboInputStream[0].at > comboWindowMs) {
+          comboInputStream.shift();
+        }
+        while (comboInputStream.length > 12) {
+          comboInputStream.shift();
+        }
+
+        if (comboInputStream.length < 4) {
+          return;
+        }
+
+        const sequence = comboInputStream.slice(-4).map((entry) => entry.key).join("");
+        const mirroredSequence = side === "right"
+          ? sequence.replace(/a/g, "#").replace(/d/g, "a").replace(/#/g, "d")
+          : sequence;
+        const normalizedSequence = side === "right" && mirroredSequence !== sequence ? mirroredSequence : sequence;
         let recognized = false;
 
-        if (sequence === "adda") {
+        if (sequence === "adda" || normalizedSequence === "adda") {
           recognized = true;
-          queueCombo("left", "wave", "Prism Zigzag");
-        } else if (sequence === "addd") {
+          queueCombo(side, "wave", "Prism Zigzag");
+        } else if (sequence === "addd" || normalizedSequence === "addd") {
           recognized = true;
-          queueCombo("left", "burstDown", "Down Burst");
-        } else if (sequence === "daaa") {
+          queueCombo(side, "burstDown", "Down Burst");
+        } else if (sequence === "daaa" || normalizedSequence === "daaa") {
           recognized = true;
-          queueCombo("left", "burstUp", "Up Burst");
-        } else if (sequence === "adad") {
+          queueCombo(side, "burstUp", "Up Burst");
+        } else if (sequence === "adad" || normalizedSequence === "adad") {
           recognized = true;
-          queueCombo("left", "curveUp", "Curve Up");
-        } else if (sequence === "dada") {
+          queueCombo(side, "curveUp", "Curve Up");
+        } else if (sequence === "dada" || normalizedSequence === "dada") {
           recognized = true;
-          queueCombo("left", "curveDown", "Curve Down");
+          queueCombo(side, "curveDown", "Curve Down");
         }
 
         if (!recognized) {
@@ -2481,9 +2565,9 @@
         }
 
         if (!state.cheats.unlockAllCombos) {
-          combo.inputs.length = 0;
+          comboInputStream.length = 0;
         }
-        tryApplyBufferedCombo("left", true);
+        tryApplyBufferedCombo(side, true);
       }
 
       function weightedEventPick() {
@@ -2993,6 +3077,8 @@
         state.ai.aimOffset = 0;
         state.ai.aimRefreshAt = 0;
         state.ai.confusedUntil = 0;
+        state.ai.trackedY = state.height * 0.5;
+        state.ai.trackRefreshAt = 0;
 
         state.prism.left.value = 0;
         state.prism.left.overexposeTimer = 0;
@@ -3007,7 +3093,7 @@
         state.vfx.flickArrows.length = 0;
         state.vfx.screenTint = 0;
         state.vfx.scorePulse = 0;
-        state.combo.inputs.length = 0;
+        clearComboInputs();
         state.combo.pending.left = null;
         state.combo.pending.right = null;
         state.cheats.comboQueue.left.length = 0;
@@ -3017,6 +3103,8 @@
         state.cheats.leftAi.aimRefreshAt = 0;
         state.cheats.leftAi.actionCooldownUntil = 0;
         state.cheats.leftAi.confusedUntil = 0;
+        state.cheats.leftAi.trackedY = state.height * 0.5;
+        state.cheats.leftAi.trackRefreshAt = 0;
 
         state.flick.leftLastAt = -1;
         state.flick.rightLastAt = -1;
@@ -3110,6 +3198,41 @@
         return minY + normalized;
       }
 
+      function getAiTrackedTargetY(side, paddle, brain, difficulty, movingTowardPaddle, now) {
+        if (now >= brain.trackRefreshAt) {
+          let trackedY;
+          if (movingTowardPaddle) {
+            const visionChance = lerp(0.52, 1, difficulty);
+            const predictionChance = lerp(0.14, 1, difficulty);
+            if (Math.random() < visionChance) {
+              if (Math.random() < predictionChance) {
+                const interceptX = side === "left"
+                  ? paddle.x + paddle.width + state.ball.radius + 2
+                  : paddle.x - state.ball.radius - 2;
+                const timeToIntercept = (interceptX - state.ball.x) / state.ball.vx;
+                trackedY = timeToIntercept > 0
+                  ? projectBallYAtTime(state.ball.y, state.ball.vy, timeToIntercept)
+                  : state.ball.y;
+              } else {
+                trackedY = state.ball.y;
+              }
+            } else {
+              trackedY = state.height * 0.5 + rand(-state.height * 0.26, state.height * 0.26);
+            }
+          } else {
+            const idleSwing = lerp(58, 8, difficulty);
+            const idleRate = lerp(0.0017, 0.0032, difficulty);
+            const phase = side === "left" ? 0.8 : 0;
+            trackedY = state.height * 0.5 + Math.sin(now * idleRate + phase) * idleSwing;
+          }
+          brain.trackedY = clamp(trackedY, state.ball.radius, state.height - state.ball.radius);
+          brain.trackRefreshAt = now + lerp(460, 24, difficulty);
+        }
+
+        const fallbackY = state.height * 0.5;
+        return Number.isFinite(brain.trackedY) ? brain.trackedY : fallbackY;
+      }
+
       function runLeftAiShotDecision(now) {
         if (state.paused || state.ball.respawnTimer > 0) {
           return;
@@ -3141,14 +3264,14 @@
         }
 
         const centerDelta = state.ball.y - (state.player.y + state.player.height * 0.5);
-        const threshold = lerp(16, 6, difficulty);
+        const threshold = lerp(22, 3, difficulty);
         let dirSign;
         if (centerDelta < -threshold) {
           dirSign = -1;
         } else if (centerDelta > threshold) {
           dirSign = 1;
         } else {
-          const followCenterChance = lerp(0.4, 0.92, difficulty);
+          const followCenterChance = lerp(0.28, 0.98, difficulty);
           if (Math.random() < followCenterChance) {
             dirSign = centerDelta === 0 ? (Math.random() < 0.5 ? -1 : 1) : (centerDelta < 0 ? -1 : 1);
           } else {
@@ -3158,24 +3281,24 @@
 
         const speed = Math.hypot(state.ball.vx, state.ball.vy);
         const mode = getModeConfig();
-        let comboChance = state.runtime.lagDetected ? 0.14 : (speed > 560 ? 0.56 : 0.38);
+        let comboChance = state.runtime.lagDetected ? 0.1 : (speed > 560 ? 0.5 : 0.28);
         if (state.settings.gameMode === "chaos") {
           comboChance += 0.08;
         }
         if (!mode.eventsEnabled) {
           comboChance += 0.04;
         }
-        comboChance += lerp(-0.12, 0.18, difficulty);
+        comboChance += lerp(-0.16, 0.24, difficulty);
         comboChance = clamp(comboChance, 0.08, 0.9);
 
-        let reactionChance = lerp(0.56, 0.98, difficulty);
+        let reactionChance = lerp(0.32, 1, difficulty);
         if (confused) {
           comboChance *= 0.56;
           reactionChance *= 0.72;
         }
 
         if (Math.random() > reactionChance) {
-          brain.actionCooldownUntil = now + rand(180, 330);
+          brain.actionCooldownUntil = now + rand(220, 460);
           return;
         }
 
@@ -3195,11 +3318,11 @@
 
         if (!acted) {
           tryFlick("left", dirSign);
-          brain.actionCooldownUntil = now + rand(lerp(260, 130, difficulty), lerp(420, 250, difficulty));
+          brain.actionCooldownUntil = now + rand(lerp(360, 110, difficulty), lerp(540, 220, difficulty));
           return;
         }
 
-        brain.actionCooldownUntil = now + rand(lerp(540, 300, difficulty), lerp(780, 520, difficulty));
+        brain.actionCooldownUntil = now + rand(lerp(640, 250, difficulty), lerp(860, 420, difficulty));
       }
 
       function updateLeftAi(dt) {
@@ -3212,23 +3335,14 @@
         const leftAi = state.cheats.leftAi;
 
         if (now >= leftAi.aimRefreshAt) {
-          const maxError = lerp(86, 8, difficulty);
+          const maxError = lerp(170, 0, difficulty);
           leftAi.aimOffset = rand(-maxError, maxError);
-          leftAi.aimRefreshAt = now + lerp(520, 120, difficulty);
+          leftAi.aimRefreshAt = now + lerp(860, 30, difficulty);
         }
         maybeTriggerAiConfusion("left", leftAi, difficulty, now);
         const confused = now < leftAi.confusedUntil;
 
-        let targetY;
-        if (movingTowardPlayer && state.ball.vx < -20) {
-          const interceptX = state.player.x + state.player.width + state.ball.radius + 2;
-          const timeToIntercept = (interceptX - state.ball.x) / state.ball.vx;
-          targetY = timeToIntercept > 0
-            ? projectBallYAtTime(state.ball.y, state.ball.vy, timeToIntercept)
-            : state.ball.y;
-        } else {
-          targetY = state.height * 0.5 + Math.sin(now * 0.0026) * 16;
-        }
+        let targetY = getAiTrackedTargetY("left", state.player, leftAi, difficulty, movingTowardPlayer, now);
 
         targetY = targetY + leftAi.aimOffset;
         if (confused) {
@@ -3236,14 +3350,14 @@
         }
         targetY = clamp(targetY, state.ball.radius, state.height - state.ball.radius);
 
-        let moveScale = movingTowardPlayer ? lerp(0.78, 1.22, difficulty) : lerp(0.6, 0.9, difficulty);
+        let moveScale = movingTowardPlayer ? lerp(0.56, 1.52, difficulty) : lerp(0.48, 1.1, difficulty);
         if (confused) {
           moveScale *= 0.74;
         }
         const moveSpeed = state.player.baseSpeed * getOpponentSlowFactor("left");
         const maxStep = moveSpeed * moveScale * dt;
         const delta = targetY - center;
-        const deadZone = lerp(18, 4, difficulty);
+        const deadZone = lerp(42, 1, difficulty);
         const step = Math.abs(delta) <= deadZone ? 0 : clamp(delta, -maxStep, maxStep);
 
         state.player.y += step;
@@ -3283,14 +3397,14 @@
         }
 
         const centerDelta = state.ball.y - (state.ai.y + state.ai.height * 0.5);
-        const threshold = lerp(16, 6, difficulty);
+        const threshold = lerp(22, 3, difficulty);
         let dirSign;
         if (centerDelta < -threshold) {
           dirSign = -1;
         } else if (centerDelta > threshold) {
           dirSign = 1;
         } else {
-          const followCenterChance = lerp(0.4, 0.92, difficulty);
+          const followCenterChance = lerp(0.28, 0.98, difficulty);
           if (Math.random() < followCenterChance) {
             dirSign = centerDelta === 0 ? (Math.random() < 0.5 ? -1 : 1) : (centerDelta < 0 ? -1 : 1);
           } else {
@@ -3300,24 +3414,24 @@
 
         const speed = Math.hypot(state.ball.vx, state.ball.vy);
         const mode = getModeConfig();
-        let comboChance = state.runtime.lagDetected ? 0.14 : (speed > 560 ? 0.56 : 0.38);
+        let comboChance = state.runtime.lagDetected ? 0.1 : (speed > 560 ? 0.5 : 0.28);
         if (state.settings.gameMode === "chaos") {
           comboChance += 0.08;
         }
         if (!mode.eventsEnabled) {
           comboChance += 0.04;
         }
-        comboChance += lerp(-0.12, 0.18, difficulty);
+        comboChance += lerp(-0.16, 0.24, difficulty);
         comboChance = clamp(comboChance, 0.08, 0.9);
 
-        let reactionChance = lerp(0.56, 0.98, difficulty);
+        let reactionChance = lerp(0.32, 1, difficulty);
         if (confused) {
           comboChance *= 0.56;
           reactionChance *= 0.72;
         }
 
         if (Math.random() > reactionChance) {
-          state.ai.actionCooldownUntil = now + rand(180, 330);
+          state.ai.actionCooldownUntil = now + rand(220, 460);
           return;
         }
 
@@ -3337,11 +3451,11 @@
 
         if (!acted) {
           tryFlick("right", dirSign);
-          state.ai.actionCooldownUntil = now + rand(lerp(260, 130, difficulty), lerp(420, 250, difficulty));
+          state.ai.actionCooldownUntil = now + rand(lerp(360, 110, difficulty), lerp(540, 220, difficulty));
           return;
         }
 
-        state.ai.actionCooldownUntil = now + rand(lerp(540, 300, difficulty), lerp(780, 520, difficulty));
+        state.ai.actionCooldownUntil = now + rand(lerp(640, 250, difficulty), lerp(860, 420, difficulty));
       }
 
       function updateAi(dt) {
@@ -3353,23 +3467,14 @@
         const difficulty = getAdaptiveAiDifficultyFactor("right");
 
         if (now >= state.ai.aimRefreshAt) {
-          const maxError = lerp(86, 8, difficulty);
+          const maxError = lerp(170, 0, difficulty);
           state.ai.aimOffset = rand(-maxError, maxError);
-          state.ai.aimRefreshAt = now + lerp(520, 120, difficulty);
+          state.ai.aimRefreshAt = now + lerp(860, 30, difficulty);
         }
         maybeTriggerAiConfusion("right", state.ai, difficulty, now);
         const confused = now < state.ai.confusedUntil;
 
-        let targetY;
-        if (movingTowardAi && state.ball.vx > 20) {
-          const interceptX = state.ai.x - state.ball.radius - 2;
-          const timeToIntercept = (interceptX - state.ball.x) / state.ball.vx;
-          targetY = timeToIntercept > 0
-            ? projectBallYAtTime(state.ball.y, state.ball.vy, timeToIntercept)
-            : state.ball.y;
-        } else {
-          targetY = state.height * 0.5 + Math.sin(now * 0.0024) * 16;
-        }
+        let targetY = getAiTrackedTargetY("right", state.ai, state.ai, difficulty, movingTowardAi, now);
 
         targetY = targetY + state.ai.aimOffset;
         if (confused) {
@@ -3377,14 +3482,14 @@
         }
         targetY = clamp(targetY, state.ball.radius, state.height - state.ball.radius);
 
-        let moveScale = movingTowardAi ? lerp(0.78, 1.22, difficulty) : lerp(0.6, 0.9, difficulty);
+        let moveScale = movingTowardAi ? lerp(0.56, 1.52, difficulty) : lerp(0.48, 1.1, difficulty);
         if (confused) {
           moveScale *= 0.74;
         }
         const aiSpeed = state.ai.baseSpeed * getOpponentSlowFactor("right");
         const maxStep = aiSpeed * moveScale * dt;
         const delta = targetY - center;
-        const deadZone = lerp(18, 4, difficulty);
+        const deadZone = lerp(42, 1, difficulty);
         const step = Math.abs(delta) <= deadZone ? 0 : clamp(delta, -maxStep, maxStep);
 
         state.ai.y += step;
@@ -3595,7 +3700,7 @@
         const now = performance.now();
         pruneComboBuffers(now);
         tryApplyBufferedCombo("left", true);
-        tryApplyBufferedCombo("right", false);
+        tryApplyBufferedCombo("right", !state.settings.aiEnabled);
 
         if (state.ball.sticky.attachedTo) {
           const side = state.ball.sticky.attachedTo === "player" ? "left" : "right";
@@ -4239,7 +4344,65 @@
           state.audio.ctx.resume().catch(() => {});
         }
 
+        ensureAudioRouting();
+        updateAudioMix();
         state.audio.unlocked = true;
+      }
+
+      function ensureAudioRouting() {
+        if (!state.audio.ctx || state.audio.routingReady) {
+          return;
+        }
+
+        const ctxAudio = state.audio.ctx;
+        const masterGain = ctxAudio.createGain();
+        const musicGain = ctxAudio.createGain();
+        const sfxGain = ctxAudio.createGain();
+        const musicFilter = ctxAudio.createBiquadFilter();
+
+        musicFilter.type = "lowpass";
+        musicFilter.frequency.setValueAtTime(7200, ctxAudio.currentTime);
+        musicFilter.Q.setValueAtTime(0.18, ctxAudio.currentTime);
+
+        musicGain.connect(musicFilter);
+        musicFilter.connect(masterGain);
+        sfxGain.connect(masterGain);
+        masterGain.connect(ctxAudio.destination);
+
+        state.audio.masterGain = masterGain;
+        state.audio.musicGainNode = musicGain;
+        state.audio.sfxGainNode = sfxGain;
+        state.audio.musicFilter = musicFilter;
+        state.audio.routingReady = true;
+      }
+
+      function updateAudioMix() {
+        if (!state.audio.ctx) {
+          return;
+        }
+
+        ensureAudioRouting();
+        if (!state.audio.routingReady) {
+          return;
+        }
+
+        const now = state.audio.ctx.currentTime;
+        const tier = getPerformanceTier();
+        const perfAudioScale = tier === 2 ? 0.45 : tier === 1 ? 0.72 : 1;
+        const audioOn = state.settings.audioEnabled;
+        const pausedMuffle = state.menuOpen;
+
+        const masterTarget = audioOn ? clamp(state.settings.masterVolume * perfAudioScale, 0, 1) : 0;
+        const musicTarget = audioOn && state.settings.musicEnabled ? clamp(state.settings.musicVolume, 0, 1) : 0;
+        const sfxTarget = audioOn && state.settings.sfxEnabled ? clamp(state.settings.sfxVolume, 0, 1) : 0;
+        const filterTarget = pausedMuffle ? 920 : (tier === 2 ? 2600 : tier === 1 ? 4600 : 7600);
+        const qTarget = pausedMuffle ? 0.78 : 0.18;
+
+        state.audio.masterGain.gain.setTargetAtTime(masterTarget, now, 0.045);
+        state.audio.musicGainNode.gain.setTargetAtTime(musicTarget, now, pausedMuffle ? 0.065 : 0.11);
+        state.audio.sfxGainNode.gain.setTargetAtTime(sfxTarget, now, 0.05);
+        state.audio.musicFilter.frequency.setTargetAtTime(filterTarget, now, pausedMuffle ? 0.08 : 0.16);
+        state.audio.musicFilter.Q.setTargetAtTime(qTarget, now, 0.11);
       }
 
       function playTone(freq, duration, type, gainAmount, channel = "sfx") {
@@ -4268,10 +4431,7 @@
         const gain = ctxAudio.createGain();
         const now = ctxAudio.currentTime;
 
-        const perfAudioScale = tier === 2 ? 0.45 : tier === 1 ? 0.72 : 1;
-        const channelVolume = channel === "music" ? state.settings.musicVolume : state.settings.sfxVolume;
-        const volume = clamp(state.settings.masterVolume * channelVolume * perfAudioScale, 0, 1);
-        const peak = gainAmount * volume;
+        const peak = Math.max(0.0001, gainAmount);
 
         osc.type = type;
         osc.frequency.setValueAtTime(freq, now);
@@ -4281,7 +4441,13 @@
         gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
 
         osc.connect(gain);
-        gain.connect(ctxAudio.destination);
+        if (channel === "music" && state.audio.musicGainNode) {
+          gain.connect(state.audio.musicGainNode);
+        } else if (channel === "sfx" && state.audio.sfxGainNode) {
+          gain.connect(state.audio.sfxGainNode);
+        } else {
+          gain.connect(ctxAudio.destination);
+        }
 
         osc.start(now);
         osc.stop(now + duration + 0.03);
@@ -4413,12 +4579,13 @@
       }
 
       function updateMusic(now) {
-        if (state.paused || !state.settings.audioEnabled || !state.settings.musicEnabled || !state.audio.unlocked) {
+        if (!state.settings.audioEnabled || !state.settings.musicEnabled || !state.audio.unlocked) {
           return;
         }
 
         const tier = getPerformanceTier();
-        if (tier === 2) {
+        const inPauseMenu = state.menuOpen;
+        if (tier === 2 && !inPauseMenu) {
           return;
         }
 
@@ -4426,16 +4593,32 @@
           return;
         }
 
-        const sequence = [196, 246.94, 293.66, 369.99, 293.66, 246.94];
-        const freq = sequence[state.audio.beatStep % sequence.length];
+        const sequence = [196, 246.94, 293.66, 369.99, 329.63, 293.66, 246.94, 220];
+        const bassline = [98, 98, 123.47, 123.47, 146.83, 123.47, 110, 98];
+        const step = state.audio.beatStep;
+        const freq = sequence[step % sequence.length];
+        const bassFreq = bassline[step % bassline.length];
 
-        playTone(freq, 0.24, "triangle", 0.11, "music");
-        if (state.audio.beatStep % 2 === 0 && tier === 0) {
-          playTone(freq * 0.5, 0.18, "sine", 0.055, "music");
+        playTone(freq, inPauseMenu ? 0.34 : 0.24, "triangle", inPauseMenu ? 0.085 : 0.11, "music");
+        if (step % 2 === 0) {
+          playTone(bassFreq, inPauseMenu ? 0.26 : 0.18, "sine", inPauseMenu ? 0.045 : 0.065, "music");
+        }
+
+        if (!inPauseMenu && tier === 0) {
+          playTone(freq * 1.5, 0.09, "sine", 0.034, "music");
+          if (step % 4 === 2) {
+            playTone(freq * 2, 0.05, "square", 0.024, "music");
+          }
+        } else if (inPauseMenu && step % 4 === 0) {
+          playTone(Math.max(80, freq * 0.5), 0.44, "triangle", 0.032, "music");
         }
 
         state.audio.beatStep += 1;
-        state.audio.nextBeatAt = now + (tier === 1 ? 760 : 560);
+        if (inPauseMenu) {
+          state.audio.nextBeatAt = now + (tier === 1 ? 820 : 680);
+        } else {
+          state.audio.nextBeatAt = now + (tier === 1 ? 680 : 520);
+        }
       }
 
       function setPauseView(view) {
@@ -4487,6 +4670,7 @@
         pauseLayer.classList.add("open");
         pauseLayer.setAttribute("aria-hidden", "false");
         setPauseView(showSettings ? "settings" : "main");
+        updateAudioMix();
         showToast("Paused");
       }
 
@@ -4508,6 +4692,7 @@
         setPauseView("main");
 
         playSfx("menu_close");
+        updateAudioMix();
         lastFrame = now;
         showToast("Resumed");
       }
@@ -4530,7 +4715,7 @@
         state.settings.gameMode = nextMode;
 
         if (previousMode !== nextMode) {
-          state.combo.inputs.length = 0;
+          clearComboInputs();
           state.combo.pending.left = null;
           state.combo.pending.right = null;
           state.cheats.comboQueue.left.length = 0;
@@ -4586,10 +4771,13 @@
         musicVolume.disabled = !state.settings.audioEnabled || !state.settings.musicEnabled;
         sfxToggle.disabled = !state.settings.audioEnabled;
         sfxVolume.disabled = !state.settings.audioEnabled || !state.settings.sfxEnabled;
+        perfToggle.disabled = state.settings.autoGraphics;
+        ultraPerfToggle.disabled = state.settings.autoGraphics || !state.settings.performanceMode;
         updateAiDifficultyLabel();
         document.body.classList.toggle("perf-mode", state.settings.performanceMode);
         document.body.classList.toggle("ultra-perf", state.settings.ultraPerformanceMode);
         document.body.classList.toggle("compat-mode", state.runtime.compatibility.isSafariLike);
+        updateAudioMix();
         renderShop();
       }
 
@@ -4611,11 +4799,13 @@
           updateBall(gameDt);
           updateEffects(gameDt);
           applyBarMaxCheats();
-          updateMusic(now);
           if (state.settings.performanceMode || state.runtime.lagDetected || state.runtime.compatibility.isSafariLike) {
             trimEffectsForPerformance();
           }
         }
+
+        updateMusic(now);
+        updateAudioMix();
 
         if (now >= state.runtime.scoreLogNextPruneAt) {
           state.runtime.scoreLogNextPruneAt = now + 10000;
@@ -4664,12 +4854,12 @@
         if (lower === "a") {
           pulseKey("p1Down");
           tryFlick("left", 1);
-          trackPlayerComboInput("a");
+          trackComboInput("left", "a");
         }
         if (lower === "d") {
           pulseKey("p1Up");
           tryFlick("left", -1);
-          trackPlayerComboInput("d");
+          trackComboInput("left", "d");
         }
         if (lower === "e") {
           pulseKey("p1Overexpose");
@@ -4681,13 +4871,15 @@
             }
           }
         }
-        if (key === "ArrowLeft") {
+        if (key === "ArrowLeft" && !state.settings.aiEnabled) {
           pulseKey("p2Up");
           tryFlick("right", -1);
+          trackComboInput("right", "d");
         }
-        if (key === "ArrowRight") {
+        if (key === "ArrowRight" && !state.settings.aiEnabled) {
           pulseKey("p2Down");
           tryFlick("right", 1);
+          trackComboInput("right", "a");
         }
       }
 
@@ -4884,6 +5076,8 @@
         }
         state.runtime.aiAdaptiveBias = 0;
         state.ai.confusedUntil = 0;
+        state.ai.trackRefreshAt = 0;
+        state.ai.trackedY = state.height * 0.5;
         state.input.p2Up = false;
         state.input.p2Down = false;
         manualBlock.classList.toggle("active", !state.settings.aiEnabled);
@@ -4902,18 +5096,20 @@
         state.settings.autoGraphics = autoGraphicsToggle.checked;
         if (!state.settings.autoGraphics) {
           state.runtime.compatibility.autoPerfApplied = false;
-        } else {
-          detectCompatibilityProfile();
-          if (state.runtime.compatibility.isSafariLike && state.settings.performanceMode) {
-            showToast("Auto graphics enabled for this browser profile");
-            syncSettingsUi();
-            resize();
-            trimEffectsForPerformance();
-            return;
-          }
+          syncSettingsUi();
+          showToast("Auto Performance disabled");
+          return;
         }
+
+        detectCompatibilityProfile();
+        state.runtime.autoPerfCooldownUntil = 0;
+        updateAutoPerformanceTier(performance.now());
         syncSettingsUi();
-        showToast(state.settings.autoGraphics ? "Auto graphics enabled" : "Auto graphics disabled");
+        if (state.runtime.compatibility.isSafariLike && state.settings.performanceMode) {
+          showToast("Auto Performance tuned for this browser profile");
+        } else {
+          showToast("Auto Performance enabled");
+        }
       });
 
       pointerAssistToggle.addEventListener("change", () => {
@@ -4937,6 +5133,7 @@
 
       masterVolume.addEventListener("input", () => {
         state.settings.masterVolume = Number(masterVolume.value);
+        updateAudioMix();
       });
 
       musicToggle.addEventListener("change", () => {
@@ -4952,6 +5149,7 @@
 
       musicVolume.addEventListener("input", () => {
         state.settings.musicVolume = Number(musicVolume.value);
+        updateAudioMix();
       });
 
       sfxToggle.addEventListener("change", () => {
@@ -4965,6 +5163,7 @@
 
       sfxVolume.addEventListener("input", () => {
         state.settings.sfxVolume = Number(sfxVolume.value);
+        updateAudioMix();
       });
 
       gameModeSelect.addEventListener("change", () => {
@@ -4972,25 +5171,15 @@
       });
 
       perfToggle.addEventListener("change", () => {
-        state.settings.performanceMode = perfToggle.checked;
-        if (!state.settings.performanceMode) {
-          state.settings.ultraPerformanceMode = false;
-        }
-        syncSettingsUi();
-        trimEffectsForPerformance();
-        resize();
-        showToast(state.settings.performanceMode ? "Performance mode enabled" : "Performance mode disabled");
+        state.settings.autoGraphics = false;
+        setPerformanceTier(perfToggle.checked ? 1 : 0, false);
+        showToast(perfToggle.checked ? "Manual Performance mode enabled" : "Manual Performance mode disabled");
       });
 
       ultraPerfToggle.addEventListener("change", () => {
-        state.settings.ultraPerformanceMode = ultraPerfToggle.checked;
-        if (state.settings.ultraPerformanceMode) {
-          state.settings.performanceMode = true;
-        }
-        syncSettingsUi();
-        trimEffectsForPerformance();
-        resize();
-        showToast(state.settings.ultraPerformanceMode ? "Ultra performance enabled" : "Ultra performance disabled");
+        state.settings.autoGraphics = false;
+        setPerformanceTier(ultraPerfToggle.checked ? 2 : 1, false);
+        showToast(ultraPerfToggle.checked ? "Manual Ultra Performance enabled" : "Manual Ultra Performance disabled");
       });
 
       loadScoreLogs();
