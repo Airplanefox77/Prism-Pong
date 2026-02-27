@@ -70,6 +70,7 @@
       const SCORE_LOG_RECENT_TTL_MS = 20 * 60 * 1000;
       const SCORE_LOG_TOP_TTL_MS = 14 * 24 * 60 * 60 * 1000;
       const SCORE_LOG_TOP_MAX = 10;
+      const CHEAT_TERMINAL_MAX_LINES = 180;
 
       const state = {
         width: 960,
@@ -145,7 +146,8 @@
           flickDir: 0,
           actionCooldownUntil: 0,
           aimOffset: 0,
-          aimRefreshAt: 0
+          aimRefreshAt: 0,
+          confusedUntil: 0
         },
         ball: {
           x: 480,
@@ -178,7 +180,8 @@
             speed: 0,
             vfxTick: 0,
             owner: null,
-            freezeBoost: false
+            freezeBoost: false,
+            curveDir: 0
           }
         },
         events: {
@@ -229,6 +232,34 @@
           tintHue: 200,
           scorePulse: 0
         },
+        cheats: {
+          terminalOpen: false,
+          terminalPauseOwned: false,
+          terminalHistory: [],
+          terminalHistoryIndex: -1,
+          gameSpeedMultiplier: 1,
+          forcedEvent: false,
+          unlockAllCombos: false,
+          aiVsAi: false,
+          godmode: {
+            left: false,
+            right: false
+          },
+          barMax: {
+            left: false,
+            right: false
+          },
+          comboQueue: {
+            left: [],
+            right: []
+          },
+          leftAi: {
+            aimOffset: 0,
+            aimRefreshAt: 0,
+            actionCooldownUntil: 0,
+            confusedUntil: 0
+          }
+        },
         runtime: {
           frameMsEMA: 16.7,
           lagDetected: false,
@@ -240,6 +271,7 @@
           autoPerfCooldownUntil: 0,
           hudNextSyncAt: 0,
           scoreLogNextPruneAt: 0,
+          aiAdaptiveBias: 0,
           hudCache: {
             pointsLabel: "",
             missesLabel: "",
@@ -338,6 +370,9 @@
       const MAX_VFX_SHOCKWAVES = 36;
 
       let lastFrame = performance.now();
+      let cheatTerminalLayer = null;
+      let cheatTerminalLog = null;
+      let cheatTerminalInput = null;
 
       function clamp(value, min, max) {
         return Math.max(min, Math.min(max, value));
@@ -393,6 +428,569 @@
 
       function travelDirToSide(dir) {
         return dir >= 0 ? "left" : "right";
+      }
+
+      function parseSideToken(token, fallback = null) {
+        if (!token) {
+          return fallback;
+        }
+        const value = token.toLowerCase();
+        if (value === "p1" || value === "player1" || value === "left") {
+          return "left";
+        }
+        if (value === "p2" || value === "player2" || value === "right" || value === "ai") {
+          return "right";
+        }
+        return null;
+      }
+
+      function parseToggleToken(token) {
+        if (!token) {
+          return null;
+        }
+        const value = token.toLowerCase();
+        if (["on", "true", "1", "enable", "enabled", "yes"].includes(value)) {
+          return true;
+        }
+        if (["off", "false", "0", "disable", "disabled", "no"].includes(value)) {
+          return false;
+        }
+        return null;
+      }
+
+      function resolveEventName(token) {
+        if (!token) {
+          return null;
+        }
+        const value = token.toLowerCase();
+        const alias = {
+          big: "large",
+          largeball: "large",
+          rainbowball: "rainbow",
+          freezeball: "freeze",
+          stickyball: "sticky"
+        };
+        const normalized = alias[value] || value;
+        return eventCatalog[normalized] ? normalized : null;
+      }
+
+      function isCheatTerminalToggleKey(event) {
+        return event.key === "`" || event.key === "~";
+      }
+
+      function shiftTimedSystemsBy(deltaMs) {
+        if (!Number.isFinite(deltaMs) || deltaMs <= 0) {
+          return;
+        }
+        if (state.events.active) {
+          state.events.endsAt += deltaMs;
+        }
+        if (Number.isFinite(state.events.nextAt)) {
+          state.events.nextAt += deltaMs;
+        }
+      }
+
+      function clearMovementInput() {
+        state.input.p1Up = false;
+        state.input.p1Down = false;
+        state.input.p2Up = false;
+        state.input.p2Down = false;
+        state.input.pointerActive = false;
+        state.input.pointerY = null;
+      }
+
+      function applyBarMaxCheats() {
+        if (state.cheats.barMax.left) {
+          state.prism.left.value = PRISM_METER_MAX;
+          state.prism.left.overexposeTimer = 0;
+          state.prism.left.shatterTimer = 0;
+        }
+        if (state.cheats.barMax.right) {
+          state.prism.right.value = PRISM_METER_MAX;
+          state.prism.right.overexposeTimer = 0;
+          state.prism.right.shatterTimer = 0;
+        }
+      }
+
+      function markHudDirty() {
+        state.runtime.hudNextSyncAt = 0;
+        syncHud(performance.now(), true);
+      }
+
+      function pushCheatTerminalLine(text, isError = false) {
+        if (!cheatTerminalLog) {
+          return;
+        }
+        const line = document.createElement("div");
+        line.className = isError ? "cheat-terminal-line error" : "cheat-terminal-line";
+        line.textContent = text;
+        cheatTerminalLog.appendChild(line);
+        while (cheatTerminalLog.childElementCount > CHEAT_TERMINAL_MAX_LINES) {
+          cheatTerminalLog.removeChild(cheatTerminalLog.firstChild);
+        }
+        cheatTerminalLog.scrollTop = cheatTerminalLog.scrollHeight;
+      }
+
+      function openCheatTerminal() {
+        ensureCheatTerminal();
+        if (state.cheats.terminalOpen || !cheatTerminalLayer || !cheatTerminalInput) {
+          return;
+        }
+
+        const now = performance.now();
+        state.cheats.terminalOpen = true;
+        state.cheats.terminalHistoryIndex = -1;
+
+        if (!state.paused) {
+          state.paused = true;
+          state.pauseStartedAt = now;
+          state.cheats.terminalPauseOwned = true;
+        } else {
+          state.cheats.terminalPauseOwned = false;
+        }
+
+        clearMovementInput();
+        cheatTerminalLayer.classList.add("open");
+        cheatTerminalLayer.setAttribute("aria-hidden", "false");
+        cheatTerminalInput.value = "";
+        cheatTerminalInput.focus();
+        pushCheatTerminalLine("Terminal opened. Type /help to list commands.");
+      }
+
+      function closeCheatTerminal() {
+        if (!state.cheats.terminalOpen) {
+          return;
+        }
+
+        const now = performance.now();
+        state.cheats.terminalOpen = false;
+        state.cheats.terminalHistoryIndex = -1;
+
+        if (cheatTerminalLayer) {
+          cheatTerminalLayer.classList.remove("open");
+          cheatTerminalLayer.setAttribute("aria-hidden", "true");
+        }
+
+        if (state.cheats.terminalPauseOwned && !state.menuOpen) {
+          const delta = state.pauseStartedAt ? now - state.pauseStartedAt : 0;
+          shiftTimedSystemsBy(delta);
+          state.paused = false;
+          state.pauseStartedAt = 0;
+          lastFrame = now;
+        }
+
+        state.cheats.terminalPauseOwned = false;
+      }
+
+      function executeCheatCommand(rawCommand) {
+        const raw = (rawCommand || "").trim();
+        if (!raw) {
+          return;
+        }
+        if (!raw.startsWith("/")) {
+          pushCheatTerminalLine("Unknown format. Use /help for command usage.", true);
+          return;
+        }
+
+        const parts = raw.slice(1).trim().split(/\s+/).filter(Boolean);
+        const command = (parts.shift() || "").toLowerCase();
+        const now = performance.now();
+
+        if (command === "help") {
+          pushCheatTerminalLine("/help");
+          pushCheatTerminalLine("/godmode [p1|p2|ai] [on|off]");
+          pushCheatTerminalLine("/event [large|rainbow|freeze|sticky|off] [seconds]");
+          pushCheatTerminalLine("/points [number]");
+          pushCheatTerminalLine("/misses [number]");
+          pushCheatTerminalLine("/barfill [value 0-100] [p1|p2|ai]");
+          pushCheatTerminalLine("/barmax [p1|p2|ai] [on|off]");
+          pushCheatTerminalLine("/unlockallcombos [on|off]");
+          pushCheatTerminalLine("/aivsai [on|off]");
+          pushCheatTerminalLine("/gamespeed [percent] (100 = normal, 25 = freeze-like)");
+          return;
+        }
+
+        if (command === "godmode") {
+          const firstSide = parseSideToken(parts[0], null);
+          const firstToggle = parseToggleToken(parts[0]);
+          if (parts[0] && !firstSide && firstToggle === null) {
+            pushCheatTerminalLine("Invalid argument. Use p1/p2/ai and optional on/off.", true);
+            return;
+          }
+          const side = firstSide || "left";
+          const toggleIdx = firstSide ? 1 : 0;
+          const explicit = parseToggleToken(parts[toggleIdx]);
+          const enabled = explicit === null ? true : explicit;
+          state.cheats.godmode[side] = enabled;
+          pushCheatTerminalLine("Godmode " + (enabled ? "enabled" : "disabled") + " for " + getSideLabel(side) + ".");
+          return;
+        }
+
+        if (command === "event") {
+          const eventNameRaw = parts[0];
+          if (!eventNameRaw) {
+            pushCheatTerminalLine("Usage: /event [large|rainbow|freeze|sticky|off] [seconds]", true);
+            return;
+          }
+          const offValues = ["off", "none", "clear", "stop"];
+          if (offValues.includes(eventNameRaw.toLowerCase())) {
+            state.cheats.forcedEvent = false;
+            endCurrentEvent(now);
+            pushCheatTerminalLine("Event cleared.");
+            markHudDirty();
+            return;
+          }
+
+          const eventName = resolveEventName(eventNameRaw);
+          if (!eventName) {
+            pushCheatTerminalLine("Unknown event. Valid: large, rainbow, freeze, sticky.", true);
+            return;
+          }
+
+          activateEvent(eventName, now);
+          state.cheats.forcedEvent = true;
+          state.events.nextAt = Number.POSITIVE_INFINITY;
+
+          const seconds = Number(parts[1]);
+          if (Number.isFinite(seconds) && seconds >= 0) {
+            state.events.endsAt = now + seconds * 1000;
+          }
+
+          const durationSec = Math.max(0, (state.events.endsAt - now) / 1000).toFixed(1);
+          pushCheatTerminalLine("Event " + eventName + " active for " + durationSec + "s.");
+          markHudDirty();
+          return;
+        }
+
+        if (command === "points") {
+          const nextValue = Number(parts[0]);
+          if (!Number.isFinite(nextValue)) {
+            pushCheatTerminalLine("Usage: /points [number]", true);
+            return;
+          }
+          const points = Math.max(0, Math.round(nextValue));
+          state.score.points = points;
+          state.score.player1 = points;
+          pushCheatTerminalLine("Points set to " + points + ".");
+          markHudDirty();
+          return;
+        }
+
+        if (command === "misses") {
+          const nextValue = Number(parts[0]);
+          if (!Number.isFinite(nextValue)) {
+            pushCheatTerminalLine("Usage: /misses [number]", true);
+            return;
+          }
+          const misses = Math.max(0, Math.round(nextValue));
+          state.score.misses = misses;
+          state.score.player2 = misses;
+          pushCheatTerminalLine("Misses set to " + misses + ".");
+          markHudDirty();
+          return;
+        }
+
+        if (command === "barfill") {
+          let side = "left";
+          let value = null;
+
+          for (const token of parts) {
+            const parsedSide = parseSideToken(token, null);
+            if (parsedSide) {
+              side = parsedSide;
+              continue;
+            }
+            const parsedValue = Number(token);
+            if (Number.isFinite(parsedValue)) {
+              value = parsedValue;
+              continue;
+            }
+          }
+
+          if (value === null) {
+            pushCheatTerminalLine("Usage: /barfill [value 0-100] [p1|p2|ai]", true);
+            return;
+          }
+
+          const clamped = clamp(value, 0, PRISM_METER_MAX);
+          const meter = state.prism[side];
+          meter.value = clamped;
+          meter.overexposeTimer = 0;
+          meter.shatterTimer = 0;
+          state.cheats.barMax[side] = false;
+          pushCheatTerminalLine(getSideLabel(side) + " bar set to " + clamped.toFixed(1) + "%.");
+          markHudDirty();
+          return;
+        }
+
+        if (command === "barmax") {
+          const firstSide = parseSideToken(parts[0], null);
+          const firstToggle = parseToggleToken(parts[0]);
+          if (parts[0] && !firstSide && firstToggle === null) {
+            pushCheatTerminalLine("Invalid argument. Use p1/p2/ai and optional on/off.", true);
+            return;
+          }
+          const side = firstSide || "left";
+          const toggleIdx = firstSide ? 1 : 0;
+          const explicit = parseToggleToken(parts[toggleIdx]);
+          const enabled = explicit === null ? !state.cheats.barMax[side] : explicit;
+          state.cheats.barMax[side] = enabled;
+          applyBarMaxCheats();
+          pushCheatTerminalLine("Barmax " + (enabled ? "enabled" : "disabled") + " for " + getSideLabel(side) + ".");
+          markHudDirty();
+          return;
+        }
+
+        if (command === "unlockallcombos") {
+          const explicit = parseToggleToken(parts[0]);
+          if (parts[0] && explicit === null) {
+            pushCheatTerminalLine("Usage: /unlockallcombos [on|off]", true);
+            return;
+          }
+          const enabled = explicit === null ? true : explicit;
+          state.cheats.unlockAllCombos = enabled;
+          if (!enabled) {
+            state.cheats.comboQueue.left.length = 0;
+            state.cheats.comboQueue.right.length = 0;
+          }
+          pushCheatTerminalLine("Unlock all combos " + (enabled ? "enabled." : "disabled."));
+          return;
+        }
+
+        if (command === "aivsai") {
+          const explicit = parseToggleToken(parts[0]);
+          if (parts[0] && explicit === null) {
+            pushCheatTerminalLine("Usage: /aivsai [on|off]", true);
+            return;
+          }
+          const enabled = explicit === null ? true : explicit;
+          state.cheats.aiVsAi = enabled;
+          if (enabled) {
+            state.settings.aiEnabled = true;
+            state.cheats.leftAi.aimRefreshAt = 0;
+            state.cheats.leftAi.actionCooldownUntil = 0;
+            state.cheats.leftAi.confusedUntil = 0;
+            state.ai.confusedUntil = 0;
+            state.runtime.aiAdaptiveBias = 0;
+            clearMovementInput();
+          }
+          syncSettingsUi();
+          markHudDirty();
+          pushCheatTerminalLine("AI vs AI " + (enabled ? "enabled." : "disabled."));
+          return;
+        }
+
+        if (command === "gamespeed") {
+          if (!parts.length) {
+            pushCheatTerminalLine("Current gamespeed: " + Math.round(state.cheats.gameSpeedMultiplier * 100) + "%.");
+            return;
+          }
+          const rawValue = parts[0].endsWith("%") ? parts[0].slice(0, -1) : parts[0];
+          const parsed = Number(rawValue);
+          if (!Number.isFinite(parsed)) {
+            pushCheatTerminalLine("Usage: /gamespeed [percent]", true);
+            return;
+          }
+          const multiplier = clamp(parsed / 100, 0, 4);
+          state.cheats.gameSpeedMultiplier = multiplier;
+          pushCheatTerminalLine("Gamespeed set to " + Math.round(multiplier * 100) + "%.");
+          return;
+        }
+
+        pushCheatTerminalLine("Unknown command: /" + command + ". Use /help.", true);
+      }
+
+      function ensureCheatTerminal() {
+        if (cheatTerminalLayer) {
+          return;
+        }
+
+        const style = document.createElement("style");
+        style.textContent = `
+          #cheatTerminalLayer {
+            position: fixed;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: rgba(3, 8, 22, 0.84);
+            z-index: 1000;
+          }
+          #cheatTerminalLayer.open {
+            display: flex;
+          }
+          .cheat-terminal-panel {
+            width: min(920px, 92vw);
+            height: min(520px, 72vh);
+            border: 1px solid rgba(126, 212, 255, 0.38);
+            border-radius: 14px;
+            background: linear-gradient(180deg, rgba(8, 22, 46, 0.98), rgba(3, 10, 25, 0.98));
+            box-shadow: 0 26px 60px rgba(0, 0, 0, 0.42);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            color: #d7efff;
+            font-family: "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+          }
+          .cheat-terminal-header {
+            padding: 10px 14px;
+            border-bottom: 1px solid rgba(126, 212, 255, 0.24);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 12px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: #9ad8ff;
+          }
+          .cheat-terminal-log {
+            flex: 1;
+            padding: 12px 14px;
+            overflow-y: auto;
+            font-size: 13px;
+            line-height: 1.55;
+          }
+          .cheat-terminal-line {
+            white-space: pre-wrap;
+            word-break: break-word;
+          }
+          .cheat-terminal-line.error {
+            color: #ff9ea1;
+          }
+          .cheat-terminal-input-row {
+            border-top: 1px solid rgba(126, 212, 255, 0.24);
+            padding: 10px 14px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #9ad8ff;
+          }
+          .cheat-terminal-input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            outline: none;
+            color: #f5fbff;
+            font: inherit;
+            font-size: 14px;
+          }
+          .cheat-terminal-footer {
+            padding: 8px 14px 10px;
+            font-size: 11px;
+            color: rgba(180, 223, 255, 0.72);
+          }
+        `;
+        document.head.appendChild(style);
+
+        cheatTerminalLayer = document.createElement("div");
+        cheatTerminalLayer.id = "cheatTerminalLayer";
+        cheatTerminalLayer.setAttribute("aria-hidden", "true");
+
+        const panel = document.createElement("div");
+        panel.className = "cheat-terminal-panel";
+
+        const header = document.createElement("div");
+        header.className = "cheat-terminal-header";
+        const headerTitle = document.createElement("span");
+        headerTitle.textContent = "Cheat Terminal";
+        const headerHint = document.createElement("span");
+        headerHint.textContent = "~ or Esc to close";
+        header.append(headerTitle, headerHint);
+
+        cheatTerminalLog = document.createElement("div");
+        cheatTerminalLog.className = "cheat-terminal-log";
+
+        const inputRow = document.createElement("div");
+        inputRow.className = "cheat-terminal-input-row";
+        const prompt = document.createElement("span");
+        prompt.textContent = ">";
+        cheatTerminalInput = document.createElement("input");
+        cheatTerminalInput.className = "cheat-terminal-input";
+        cheatTerminalInput.type = "text";
+        cheatTerminalInput.spellcheck = false;
+        cheatTerminalInput.autocomplete = "off";
+        cheatTerminalInput.autocapitalize = "off";
+        cheatTerminalInput.placeholder = "/help";
+        inputRow.append(prompt, cheatTerminalInput);
+
+        const footer = document.createElement("div");
+        footer.className = "cheat-terminal-footer";
+        footer.textContent = "Commands start with /. Example: /godmode p1 on";
+
+        panel.append(header, cheatTerminalLog, inputRow, footer);
+        cheatTerminalLayer.appendChild(panel);
+        document.body.appendChild(cheatTerminalLayer);
+
+        cheatTerminalLayer.addEventListener("click", (event) => {
+          if (event.target === cheatTerminalLayer && cheatTerminalInput) {
+            cheatTerminalInput.focus();
+          }
+        });
+
+        cheatTerminalInput.addEventListener("keydown", (event) => {
+          event.stopPropagation();
+
+          if (isCheatTerminalToggleKey(event)) {
+            event.preventDefault();
+            closeCheatTerminal();
+            return;
+          }
+
+          if (event.key === "Escape") {
+            event.preventDefault();
+            closeCheatTerminal();
+            return;
+          }
+
+          if (event.key === "ArrowUp") {
+            const history = state.cheats.terminalHistory;
+            if (!history.length) {
+              return;
+            }
+            event.preventDefault();
+            if (state.cheats.terminalHistoryIndex < 0) {
+              state.cheats.terminalHistoryIndex = history.length - 1;
+            } else {
+              state.cheats.terminalHistoryIndex = Math.max(0, state.cheats.terminalHistoryIndex - 1);
+            }
+            cheatTerminalInput.value = history[state.cheats.terminalHistoryIndex] || "";
+            return;
+          }
+
+          if (event.key === "ArrowDown") {
+            const history = state.cheats.terminalHistory;
+            if (!history.length) {
+              return;
+            }
+            event.preventDefault();
+            if (state.cheats.terminalHistoryIndex < 0 || state.cheats.terminalHistoryIndex >= history.length - 1) {
+              state.cheats.terminalHistoryIndex = -1;
+              cheatTerminalInput.value = "";
+            } else {
+              state.cheats.terminalHistoryIndex += 1;
+              cheatTerminalInput.value = history[state.cheats.terminalHistoryIndex] || "";
+            }
+            return;
+          }
+
+          if (event.key === "Enter") {
+            event.preventDefault();
+            const raw = cheatTerminalInput.value.trim();
+            if (!raw) {
+              return;
+            }
+            state.cheats.terminalHistory.push(raw);
+            if (state.cheats.terminalHistory.length > 50) {
+              state.cheats.terminalHistory.shift();
+            }
+            state.cheats.terminalHistoryIndex = -1;
+            pushCheatTerminalLine("> " + raw);
+            executeCheatCommand(raw);
+            cheatTerminalInput.value = "";
+          }
+        });
+
+        pushCheatTerminalLine("Cheat terminal ready. Type /help.");
       }
 
       function getSurvivalSpeedMultiplier() {
@@ -471,6 +1069,37 @@
 
       function getAiDifficultyFactor() {
         return clamp((state.settings.aiDifficulty - 1) / 9, 0, 1);
+      }
+
+      function getAdaptiveAiDifficultyFactor(side = "right") {
+        const base = getAiDifficultyFactor();
+        if (side !== "right" || !state.settings.aiEnabled || state.cheats.aiVsAi) {
+          return base;
+        }
+
+        const scoreDelta = state.score.points - state.score.misses;
+        const scorePressure = clamp(scoreDelta / 14, -1, 1);
+        const streakPressure = clamp((state.score.streak - 2) / 12, -0.35, 0.35);
+        const targetBias = clamp(scorePressure * 0.44 + streakPressure, -0.42, 0.48);
+
+        state.runtime.aiAdaptiveBias += (targetBias - state.runtime.aiAdaptiveBias) * 0.045;
+        return clamp(base + state.runtime.aiAdaptiveBias, 0.04, 1);
+      }
+
+      function isComboThreatForSide(side) {
+        return !!state.ball.combo.mode && state.ball.combo.owner === getOpponentSide(side);
+      }
+
+      function maybeTriggerAiConfusion(side, brain, difficulty, now) {
+        if (!isComboThreatForSide(side) || now < brain.confusedUntil) {
+          return;
+        }
+
+        const confuseChance = lerp(0.24, 0.06, difficulty);
+        if (Math.random() < confuseChance) {
+          brain.confusedUntil = now + rand(260, 680);
+          brain.aimOffset += rand(-220, 220);
+        }
       }
 
       function canActivateOverexpose(side) {
@@ -590,15 +1219,28 @@
 
       function queueCombo(side, type, label) {
         const now = performance.now();
-        state.combo.pending[side] = {
+        const entry = {
           type,
           label,
           expiresAt: now + COMBO_BUFFER_MS
         };
+        if (state.cheats.unlockAllCombos) {
+          state.cheats.comboQueue[side].push(entry);
+          showToast(getSideLabel(side) + " combo banked: " + label);
+          return;
+        }
+        state.combo.pending[side] = entry;
         showToast(getSideLabel(side) + " combo primed: " + label);
       }
 
       function pruneComboBuffers(now) {
+        if (state.cheats.comboQueue.left.length) {
+          state.cheats.comboQueue.left = state.cheats.comboQueue.left.filter((entry) => now <= entry.expiresAt);
+        }
+        if (state.cheats.comboQueue.right.length) {
+          state.cheats.comboQueue.right = state.cheats.comboQueue.right.filter((entry) => now <= entry.expiresAt);
+        }
+
         if (state.combo.pending.left && now > state.combo.pending.left.expiresAt) {
           state.combo.pending.left = null;
         }
@@ -609,6 +1251,35 @@
       }
 
       function tryApplyBufferedCombo(side, showCue = true) {
+        if (state.cheats.unlockAllCombos && state.cheats.comboQueue[side].length) {
+          const queue = state.cheats.comboQueue[side];
+          let activatedCount = 0;
+          let index = 0;
+          const now = performance.now();
+
+          while (index < queue.length) {
+            const pending = queue[index];
+            if (now > pending.expiresAt) {
+              queue.splice(index, 1);
+              continue;
+            }
+
+            const activated = applyComboMove(side, pending.type, showCue && activatedCount === 0);
+            if (!activated) {
+              break;
+            }
+
+            activatedCount += 1;
+            queue.splice(index, 1);
+          }
+
+          if (activatedCount > 1) {
+            showToast(getSideLabel(side) + " unleashed " + activatedCount + " combos");
+          }
+
+          return activatedCount > 0;
+        }
+
         const pending = state.combo.pending[side];
         if (!pending) {
           return false;
@@ -929,6 +1600,7 @@
         state.ball.combo.vfxTick = 0;
         state.ball.combo.owner = null;
         state.ball.combo.freezeBoost = false;
+        state.ball.combo.curveDir = 0;
       }
 
       function trimEffectsForPerformance() {
@@ -1172,7 +1844,12 @@
         const comboSpeed = clamp((currentSpeed + 430) * shotPower, 760, getShotSpeedCap(side, 420));
 
         if (attachedToThis) {
-          const releaseDir = type === "burstUp" ? -1 : 1;
+          let releaseDir = 0;
+          if (type === "burstUp" || type === "curveUp") {
+            releaseDir = -1;
+          } else if (type === "burstDown" || type === "curveDown") {
+            releaseDir = 1;
+          }
           releaseStickyBall(releaseDir, false);
         }
 
@@ -1188,11 +1865,34 @@
           state.ball.combo.vfxTick = 0;
           state.ball.combo.owner = side;
           state.ball.combo.freezeBoost = !!state.events.freeze;
+          state.ball.combo.curveDir = 0;
           triggerPaddleFlick(paddle, -1);
           spawnFlickTrail(side, -1);
           spawnFlickTrail(side, 1);
           if (showCue) {
             showToast(getSideLabel(side) + " Combo: Prism Zigzag");
+          }
+          playSfx("combo_wave");
+        } else if (type === "curveUp" || type === "curveDown") {
+          const curveDir = type === "curveUp" ? -1 : 1;
+          const curveSpeed = clamp(comboSpeed * 0.9, 820, getShotSpeedCap(side, 420));
+          state.ball.vx = travelDir * curveSpeed;
+          state.ball.vy = 0;
+          state.ball.combo.mode = "curve";
+          state.ball.combo.timer = 690;
+          state.ball.combo.duration = 690;
+          state.ball.combo.baseVy = curveDir * clamp(curveSpeed * 0.88, 420, 980);
+          state.ball.combo.travelDir = travelDir;
+          state.ball.combo.speed = Math.abs(state.ball.vx);
+          state.ball.combo.vfxTick = 0;
+          state.ball.combo.owner = side;
+          state.ball.combo.freezeBoost = !!state.events.freeze;
+          state.ball.combo.curveDir = curveDir;
+          triggerPaddleFlick(paddle, curveDir);
+          spawnFlickTrail(side, curveDir);
+          if (showCue) {
+            const label = curveDir < 0 ? "Curve Up" : "Curve Down";
+            showToast(getSideLabel(side) + " Combo: " + label);
           }
           playSfx("combo_wave");
         } else {
@@ -1209,6 +1909,7 @@
           state.ball.combo.vfxTick = 0;
           state.ball.combo.owner = side;
           state.ball.combo.freezeBoost = !!state.events.freeze;
+          state.ball.combo.curveDir = 0;
           triggerPaddleFlick(paddle, burstDir);
           spawnFlickTrail(side, burstDir);
           if (showCue) {
@@ -1278,13 +1979,21 @@
         } else if (sequence === "daaa") {
           recognized = true;
           queueCombo("left", "burstUp", "Up Burst");
+        } else if (sequence === "adad") {
+          recognized = true;
+          queueCombo("left", "curveUp", "Curve Up");
+        } else if (sequence === "dada") {
+          recognized = true;
+          queueCombo("left", "curveDown", "Curve Down");
         }
 
         if (!recognized) {
           return;
         }
 
-        combo.inputs.length = 0;
+        if (!state.cheats.unlockAllCombos) {
+          combo.inputs.length = 0;
+        }
         tryApplyBufferedCombo("left", true);
       }
 
@@ -1516,6 +2225,7 @@
         clearEffects();
         state.events.active = null;
         state.events.endsAt = 0;
+        state.cheats.forcedEvent = false;
         scheduleNextEvent(now);
 
         spawnImpactVfx(state.width * 0.5, state.height * 0.5, 212, 0, 0, 0.9);
@@ -1559,6 +2269,13 @@
 
       function maybeTriggerEvent(now) {
         const mode = getModeConfig();
+
+        if (state.cheats.forcedEvent) {
+          if (state.events.active && now >= state.events.endsAt) {
+            endCurrentEvent(now);
+          }
+          return;
+        }
 
         if (!mode.eventsEnabled) {
           if (state.events.active) {
@@ -1775,6 +2492,7 @@
         state.ai.actionCooldownUntil = 0;
         state.ai.aimOffset = 0;
         state.ai.aimRefreshAt = 0;
+        state.ai.confusedUntil = 0;
 
         state.prism.left.value = 0;
         state.prism.left.overexposeTimer = 0;
@@ -1782,6 +2500,7 @@
         state.prism.right.value = 0;
         state.prism.right.overexposeTimer = 0;
         state.prism.right.shatterTimer = 0;
+        applyBarMaxCheats();
 
         state.vfx.particles.length = 0;
         state.vfx.shockwaves.length = 0;
@@ -1791,6 +2510,13 @@
         state.combo.inputs.length = 0;
         state.combo.pending.left = null;
         state.combo.pending.right = null;
+        state.cheats.comboQueue.left.length = 0;
+        state.cheats.comboQueue.right.length = 0;
+        state.cheats.forcedEvent = false;
+        state.cheats.leftAi.aimOffset = 0;
+        state.cheats.leftAi.aimRefreshAt = 0;
+        state.cheats.leftAi.actionCooldownUntil = 0;
+        state.cheats.leftAi.confusedUntil = 0;
 
         state.flick.leftLastAt = -1;
         state.flick.rightLastAt = -1;
@@ -1799,6 +2525,7 @@
         state.runtime.lagDetected = false;
         state.runtime.lagHoldUntil = 0;
         state.runtime.frameId = 0;
+        state.runtime.aiAdaptiveBias = 0;
         state.runtime.vfxLimiter.budgetFrameId = -1;
         state.runtime.vfxLimiter.generalBudget = 0;
         state.runtime.vfxLimiter.flickBudget = 0;
@@ -1839,6 +2566,11 @@
       }
 
       function updatePlayer(dt) {
+        if (state.cheats.aiVsAi) {
+          updateLeftAi(dt);
+          return;
+        }
+
         state.player.lastY = state.player.y;
 
         const moveSpeed = state.player.baseSpeed * getOpponentSlowFactor("left");
@@ -1878,11 +2610,154 @@
         return minY + normalized;
       }
 
+      function runLeftAiShotDecision(now) {
+        if (state.paused || state.ball.respawnTimer > 0) {
+          return;
+        }
+
+        const brain = state.cheats.leftAi;
+        if (now < brain.actionCooldownUntil) {
+          return;
+        }
+
+        const stickyAttached = state.ball.sticky.attachedTo === "player";
+        const closeToBall = isBallCloseToPaddle(state.player, "left");
+        const incoming = state.ball.vx < -70 || stickyAttached;
+        const difficulty = getAdaptiveAiDifficultyFactor("left");
+        maybeTriggerAiConfusion("left", brain, difficulty, now);
+        const confused = now < brain.confusedUntil;
+
+        if (canActivateOverexpose("left")) {
+          const triggerChance = 0.16 + difficulty * 0.55;
+          if (Math.random() < triggerChance) {
+            activateOverexpose("left", true);
+            brain.actionCooldownUntil = now + rand(220, 420);
+            return;
+          }
+        }
+
+        if (!incoming || (!closeToBall && !stickyAttached)) {
+          return;
+        }
+
+        const centerDelta = state.ball.y - (state.player.y + state.player.height * 0.5);
+        const threshold = lerp(16, 6, difficulty);
+        let dirSign;
+        if (centerDelta < -threshold) {
+          dirSign = -1;
+        } else if (centerDelta > threshold) {
+          dirSign = 1;
+        } else {
+          const followCenterChance = lerp(0.4, 0.92, difficulty);
+          if (Math.random() < followCenterChance) {
+            dirSign = centerDelta === 0 ? (Math.random() < 0.5 ? -1 : 1) : (centerDelta < 0 ? -1 : 1);
+          } else {
+            dirSign = Math.random() < 0.5 ? -1 : 1;
+          }
+        }
+
+        const speed = Math.hypot(state.ball.vx, state.ball.vy);
+        const mode = getModeConfig();
+        let comboChance = state.runtime.lagDetected ? 0.14 : (speed > 560 ? 0.56 : 0.38);
+        if (state.settings.gameMode === "chaos") {
+          comboChance += 0.08;
+        }
+        if (!mode.eventsEnabled) {
+          comboChance += 0.04;
+        }
+        comboChance += lerp(-0.12, 0.18, difficulty);
+        comboChance = clamp(comboChance, 0.08, 0.9);
+
+        let reactionChance = lerp(0.56, 0.98, difficulty);
+        if (confused) {
+          comboChance *= 0.56;
+          reactionChance *= 0.72;
+        }
+
+        if (Math.random() > reactionChance) {
+          brain.actionCooldownUntil = now + rand(180, 330);
+          return;
+        }
+
+        let acted = false;
+
+        if (Math.random() < comboChance) {
+          let comboType;
+          if (Math.abs(centerDelta) < state.player.height * 0.18) {
+            comboType = "wave";
+          } else if (Math.random() < 0.22) {
+            comboType = dirSign < 0 ? "curveUp" : "curveDown";
+          } else {
+            comboType = dirSign < 0 ? "burstUp" : "burstDown";
+          }
+          acted = applyComboMove("left", comboType, true);
+        }
+
+        if (!acted) {
+          tryFlick("left", dirSign);
+          brain.actionCooldownUntil = now + rand(lerp(260, 130, difficulty), lerp(420, 250, difficulty));
+          return;
+        }
+
+        brain.actionCooldownUntil = now + rand(lerp(540, 300, difficulty), lerp(780, 520, difficulty));
+      }
+
+      function updateLeftAi(dt) {
+        const now = performance.now();
+        state.player.lastY = state.player.y;
+
+        const center = state.player.y + state.player.height * 0.5;
+        const movingTowardPlayer = state.ball.vx < -20 || state.ball.sticky.attachedTo === "player";
+        const difficulty = getAdaptiveAiDifficultyFactor("left");
+        const leftAi = state.cheats.leftAi;
+
+        if (now >= leftAi.aimRefreshAt) {
+          const maxError = lerp(86, 8, difficulty);
+          leftAi.aimOffset = rand(-maxError, maxError);
+          leftAi.aimRefreshAt = now + lerp(520, 120, difficulty);
+        }
+        maybeTriggerAiConfusion("left", leftAi, difficulty, now);
+        const confused = now < leftAi.confusedUntil;
+
+        let targetY;
+        if (movingTowardPlayer && state.ball.vx < -20) {
+          const interceptX = state.player.x + state.player.width + state.ball.radius + 2;
+          const timeToIntercept = (interceptX - state.ball.x) / state.ball.vx;
+          targetY = timeToIntercept > 0
+            ? projectBallYAtTime(state.ball.y, state.ball.vy, timeToIntercept)
+            : state.ball.y;
+        } else {
+          targetY = state.height * 0.5 + Math.sin(now * 0.0026) * 16;
+        }
+
+        targetY = targetY + leftAi.aimOffset;
+        if (confused) {
+          targetY += Math.sin(now * 0.024) * state.player.height * 0.28;
+        }
+        targetY = clamp(targetY, state.ball.radius, state.height - state.ball.radius);
+
+        let moveScale = movingTowardPlayer ? lerp(0.78, 1.22, difficulty) : lerp(0.6, 0.9, difficulty);
+        if (confused) {
+          moveScale *= 0.74;
+        }
+        const moveSpeed = state.player.baseSpeed * getOpponentSlowFactor("left");
+        const maxStep = moveSpeed * moveScale * dt;
+        const delta = targetY - center;
+        const deadZone = lerp(18, 4, difficulty);
+        const step = Math.abs(delta) <= deadZone ? 0 : clamp(delta, -maxStep, maxStep);
+
+        state.player.y += step;
+        state.player.y = clamp(state.player.y, 0, state.height - state.player.height);
+
+        runLeftAiShotDecision(now);
+      }
+
       function runAiShotDecision(now) {
         if (state.paused || state.ball.respawnTimer > 0) {
           return;
         }
 
+        const brain = state.ai;
         if (now < state.ai.actionCooldownUntil) {
           return;
         }
@@ -1890,7 +2765,9 @@
         const stickyAttached = state.ball.sticky.attachedTo === "ai";
         const closeToBall = isBallCloseToPaddle(state.ai, "right");
         const incoming = state.ball.vx > 70 || stickyAttached;
-        const difficulty = getAiDifficultyFactor();
+        const difficulty = getAdaptiveAiDifficultyFactor("right");
+        maybeTriggerAiConfusion("right", brain, difficulty, now);
+        const confused = now < brain.confusedUntil;
 
         if (canActivateOverexpose("right")) {
           const triggerChance = 0.16 + difficulty * 0.55;
@@ -1933,7 +2810,12 @@
         comboChance += lerp(-0.12, 0.18, difficulty);
         comboChance = clamp(comboChance, 0.08, 0.9);
 
-        const reactionChance = lerp(0.56, 0.98, difficulty);
+        let reactionChance = lerp(0.56, 0.98, difficulty);
+        if (confused) {
+          comboChance *= 0.56;
+          reactionChance *= 0.72;
+        }
+
         if (Math.random() > reactionChance) {
           state.ai.actionCooldownUntil = now + rand(180, 330);
           return;
@@ -1942,9 +2824,14 @@
         let acted = false;
 
         if (Math.random() < comboChance) {
-          const comboType = Math.abs(centerDelta) < state.ai.height * 0.18
-            ? "wave"
-            : (dirSign < 0 ? "burstUp" : "burstDown");
+          let comboType;
+          if (Math.abs(centerDelta) < state.ai.height * 0.18) {
+            comboType = "wave";
+          } else if (Math.random() < 0.22) {
+            comboType = dirSign < 0 ? "curveUp" : "curveDown";
+          } else {
+            comboType = dirSign < 0 ? "burstUp" : "burstDown";
+          }
           acted = applyComboMove("right", comboType, true);
         }
 
@@ -1963,13 +2850,15 @@
 
         const center = state.ai.y + state.ai.height * 0.5;
         const movingTowardAi = state.ball.vx > 20 || state.ball.sticky.attachedTo === "ai";
-        const difficulty = getAiDifficultyFactor();
+        const difficulty = getAdaptiveAiDifficultyFactor("right");
 
         if (now >= state.ai.aimRefreshAt) {
           const maxError = lerp(86, 8, difficulty);
           state.ai.aimOffset = rand(-maxError, maxError);
           state.ai.aimRefreshAt = now + lerp(520, 120, difficulty);
         }
+        maybeTriggerAiConfusion("right", state.ai, difficulty, now);
+        const confused = now < state.ai.confusedUntil;
 
         let targetY;
         if (movingTowardAi && state.ball.vx > 20) {
@@ -1982,9 +2871,16 @@
           targetY = state.height * 0.5 + Math.sin(now * 0.0024) * 16;
         }
 
-        targetY = clamp(targetY + state.ai.aimOffset, state.ball.radius, state.height - state.ball.radius);
+        targetY = targetY + state.ai.aimOffset;
+        if (confused) {
+          targetY += Math.sin(now * 0.024) * state.ai.height * 0.28;
+        }
+        targetY = clamp(targetY, state.ball.radius, state.height - state.ball.radius);
 
-        const moveScale = movingTowardAi ? lerp(0.78, 1.22, difficulty) : lerp(0.6, 0.9, difficulty);
+        let moveScale = movingTowardAi ? lerp(0.78, 1.22, difficulty) : lerp(0.6, 0.9, difficulty);
+        if (confused) {
+          moveScale *= 0.74;
+        }
         const aiSpeed = state.ai.baseSpeed * getOpponentSlowFactor("right");
         const maxStep = aiSpeed * moveScale * dt;
         const delta = targetY - center;
@@ -2101,8 +2997,36 @@
         playSfx("hit");
       }
 
+      function recoverBallForGodmode(side) {
+        clearBallCombo();
+        clearBallCharge();
+        state.ball.sticky.attachedTo = null;
+        state.ball.sticky.timer = 0;
+        state.ball.respawnTimer = 0;
+        state.score.streak = 0;
+
+        if (side === "left") {
+          state.ball.x = state.player.x + state.player.width + state.ball.radius + 4;
+          state.ball.vx = Math.max(340, Math.abs(state.ball.vx || 340));
+        } else {
+          state.ball.x = state.ai.x - state.ball.radius - 4;
+          state.ball.vx = -Math.max(340, Math.abs(state.ball.vx || 340));
+        }
+
+        state.ball.y = clamp(state.ball.y, state.ball.radius, state.height - state.ball.radius);
+        state.ball.vy = clamp(state.ball.vy + rand(-120, 120), -640, 640);
+        state.ball.lastTouch = side;
+        state.shake = Math.max(state.shake, 4);
+        showToast(getSideLabel(side) + " godmode saved the point");
+      }
+
       function handleScoring() {
         if (state.ball.x + state.ball.radius < 0) {
+          if (state.cheats.godmode.left) {
+            recoverBallForGodmode("left");
+            return;
+          }
+
           const gain = scoreWithPrism(1, "right", true);
           state.score.player2 += gain;
           state.score.streak = 0;
@@ -2132,6 +3056,11 @@
         }
 
         if (state.ball.x - state.ball.radius > state.width) {
+          if (state.cheats.godmode.right) {
+            recoverBallForGodmode("right");
+            return;
+          }
+
           const base = state.settings.aiEnabled ? (state.events.rainbow ? 6 : 3) : 1;
           const gain = scoreWithPrism(base, "left", true);
 
@@ -2197,6 +3126,11 @@
               const progress = 1 - combo.timer / combo.duration;
               const wave = Math.sin(progress * Math.PI * 2.9 - Math.PI / 2);
               state.ball.vy = clamp(combo.baseVy + wave * 940, -1260, 1260);
+            } else if (combo.mode === "curve") {
+              const progress = 1 - combo.timer / combo.duration;
+              const eased = progress * progress * (3 - 2 * progress);
+              const curveVy = combo.baseVy * eased;
+              state.ball.vy = clamp(curveVy, -1260, 1260);
             } else {
               const minBurstVy = Math.abs(combo.baseVy) * 0.9;
               state.ball.vy *= Math.pow(0.992, ballDt * 60);
@@ -2927,7 +3861,7 @@
       }
 
       function openPauseMenu(showSettings = false) {
-        if (state.menuOpen) {
+        if (state.menuOpen || state.cheats.terminalOpen) {
           return;
         }
 
@@ -2948,11 +3882,7 @@
 
         const now = performance.now();
         const delta = state.pauseStartedAt ? now - state.pauseStartedAt : 0;
-
-        if (state.events.active) {
-          state.events.endsAt += delta;
-        }
-        state.events.nextAt += delta;
+        shiftTimedSystemsBy(delta);
 
         state.menuOpen = false;
         state.paused = false;
@@ -2988,16 +3918,18 @@
           state.combo.inputs.length = 0;
           state.combo.pending.left = null;
           state.combo.pending.right = null;
+          state.cheats.comboQueue.left.length = 0;
+          state.cheats.comboQueue.right.length = 0;
           clearBallCombo();
           clearBallCharge();
         }
 
-        if (!getModeConfig().eventsEnabled) {
+        if (!getModeConfig().eventsEnabled && !state.cheats.forcedEvent) {
           clearEffects();
           state.events.active = null;
           state.events.endsAt = 0;
           state.events.nextAt = Number.POSITIVE_INFINITY;
-        } else {
+        } else if (!state.cheats.forcedEvent) {
           scheduleNextEvent(performance.now() + 1400);
         }
 
@@ -3050,17 +3982,19 @@
 
         const frameMs = now - lastFrame;
         const dt = Math.min(0.033, frameMs / 1000);
+        const gameDt = dt * state.cheats.gameSpeedMultiplier;
         lastFrame = now;
 
         updateLagState(frameMs, now);
 
         if (!state.paused) {
           maybeTriggerEvent(now);
-          updateSurvivalRamp(dt);
-          updatePlayer(dt);
-          updateSecondPaddle(dt);
-          updateBall(dt);
-          updateEffects(dt);
+          updateSurvivalRamp(gameDt);
+          updatePlayer(gameDt);
+          updateSecondPaddle(gameDt);
+          updateBall(gameDt);
+          updateEffects(gameDt);
+          applyBarMaxCheats();
           updateMusic(now);
           if (state.settings.performanceMode || state.runtime.lagDetected || state.runtime.compatibility.isSafariLike) {
             trimEffectsForPerformance();
@@ -3088,6 +4022,10 @@
       function handleGameplayKeydown(event) {
         const key = event.key;
         const lower = key.toLowerCase();
+
+        if (state.cheats.aiVsAi) {
+          return;
+        }
 
         if (lower === "w") {
           state.input.p1Up = true;
@@ -3141,6 +4079,10 @@
         const key = event.key;
         const lower = key.toLowerCase();
 
+        if (state.cheats.aiVsAi) {
+          return;
+        }
+
         if (lower === "w") {
           state.input.p1Up = false;
         }
@@ -3163,7 +4105,24 @@
           event.preventDefault();
         }
 
+        if (isCheatTerminalToggleKey(event)) {
+          event.preventDefault();
+          if (state.cheats.terminalOpen) {
+            closeCheatTerminal();
+          } else {
+            openCheatTerminal();
+          }
+          return;
+        }
+
         unlockAudio();
+
+        if (state.cheats.terminalOpen) {
+          if (event.key === "Escape") {
+            closeCheatTerminal();
+          }
+          return;
+        }
 
         if (event.key === "Escape") {
           if (state.menuOpen) {
@@ -3191,6 +4150,9 @@
       });
 
       window.addEventListener("keyup", (event) => {
+        if (state.cheats.terminalOpen) {
+          return;
+        }
         handleGameplayKeyup(event);
       });
 
@@ -3199,7 +4161,7 @@
       });
 
       window.addEventListener("mousemove", (event) => {
-        if (state.menuOpen || !state.settings.pointerAssist) {
+        if (state.menuOpen || state.cheats.terminalOpen || !state.settings.pointerAssist) {
           return;
         }
 
@@ -3224,7 +4186,7 @@
 
       canvas.addEventListener("touchstart", (event) => {
         unlockAudio();
-        if (state.menuOpen || !state.settings.pointerAssist || !event.touches[0]) {
+        if (state.menuOpen || state.cheats.terminalOpen || !state.settings.pointerAssist || !event.touches[0]) {
           return;
         }
 
@@ -3233,7 +4195,7 @@
       }, { passive: true });
 
       canvas.addEventListener("touchmove", (event) => {
-        if (state.menuOpen || !state.settings.pointerAssist || !event.touches[0]) {
+        if (state.menuOpen || state.cheats.terminalOpen || !state.settings.pointerAssist || !event.touches[0]) {
           return;
         }
 
@@ -3273,6 +4235,11 @@
 
       aiToggle.addEventListener("change", () => {
         state.settings.aiEnabled = aiToggle.checked;
+        if (!state.settings.aiEnabled) {
+          state.cheats.aiVsAi = false;
+        }
+        state.runtime.aiAdaptiveBias = 0;
+        state.ai.confusedUntil = 0;
         state.input.p2Up = false;
         state.input.p2Down = false;
         manualBlock.classList.toggle("active", !state.settings.aiEnabled);
@@ -3385,6 +4352,7 @@
       loadScoreLogs();
       renderScoreLogs();
       detectCompatibilityProfile();
+      ensureCheatTerminal();
       syncSettingsUi();
       resize();
       setGameMode(state.settings.gameMode, false);
