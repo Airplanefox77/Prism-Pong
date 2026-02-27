@@ -19,6 +19,7 @@
       <article class="stat">
         <span class="label" id="missesLabel">Misses</span>
         <strong class="value" id="missesValue">0</strong>
+        <span id="missesRatioTip" class="ratio-tip" aria-hidden="true"></span>
       </article>
       <article class="stat">
         <span class="label" id="streakLabel">Streak</span>
@@ -45,6 +46,7 @@
           <div id="pauseMain" class="menu-stack">
             <button id="pauseResumeBtn" class="menu-btn" type="button">Resume Game</button>
             <button id="pauseSettingsBtn" class="menu-btn" type="button">Settings</button>
+            <button id="pauseShopBtn" class="menu-btn" type="button">Shop</button>
             <button id="pauseRestartBtn" class="menu-btn" type="button">Restart Match</button>
           </div>
 
@@ -210,6 +212,32 @@
             </section>
 
             <button id="settingsBackBtn" class="ghost-btn" type="button">Back</button>
+          </div>
+
+          <div id="shopPanel" class="settings-panel">
+            <div class="shop-head">
+              <h3>Shop</h3>
+              <span class="shop-points">Points: <strong id="shopPointsValue">0</strong></span>
+            </div>
+            <p class="setting-note">Spend points to unlock cosmetic skins and board themes. Rainbow paddle costs 350 points.</p>
+
+            <div class="settings-tabs" role="tablist" aria-label="Shop tabs">
+              <button class="shop-tab-btn active" data-shop-tab-target="shopPaddleTab" type="button" role="tab">Paddle Skins</button>
+              <button class="shop-tab-btn" data-shop-tab-target="shopBallTab" type="button" role="tab">Ball Skins</button>
+              <button class="shop-tab-btn" data-shop-tab-target="shopThemeTab" type="button" role="tab">Arena Themes</button>
+            </div>
+
+            <section class="shop-tab-panel active" id="shopPaddleTab" role="tabpanel">
+              <div id="shopPaddleGrid" class="shop-grid"></div>
+            </section>
+            <section class="shop-tab-panel" id="shopBallTab" role="tabpanel">
+              <div id="shopBallGrid" class="shop-grid"></div>
+            </section>
+            <section class="shop-tab-panel" id="shopThemeTab" role="tabpanel">
+              <div id="shopThemeGrid" class="shop-grid"></div>
+            </section>
+
+            <button id="shopBackBtn" class="ghost-btn" type="button">Back</button>
           </div>
         </section>
       </div>

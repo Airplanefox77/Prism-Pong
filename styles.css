@@ -92,6 +92,7 @@ body {
   display: grid;
   gap: 4px;
   min-height: 56px;
+  position: relative;
 }
 
 .label {
@@ -263,6 +264,7 @@ canvas {
 button,
 .menu-btn,
 .tab-btn,
+.shop-tab-btn,
 .ghost-btn {
   border: 1px solid rgba(255, 255, 255, 0.32);
   background: rgba(10, 18, 37, 0.4);
@@ -278,6 +280,7 @@ button,
 button:hover,
 .menu-btn:hover,
 .tab-btn:hover,
+.shop-tab-btn:hover,
 .ghost-btn:hover {
   transform: translateY(-1px);
   background: rgba(126, 216, 255, 0.2);
@@ -394,6 +397,10 @@ button:hover,
   animation-delay: 0.21s;
 }
 
+.pause-layer.open .menu-stack .menu-btn:nth-child(4) {
+  animation-delay: 0.27s;
+}
+
 @keyframes floatIn {
   from {
     opacity: 0;
@@ -438,7 +445,14 @@ button:hover,
   letter-spacing: 0.03em;
 }
 
-.tab-btn.active {
+.shop-tab-btn {
+  padding: 7px 12px;
+  font-size: 0.8rem;
+  letter-spacing: 0.03em;
+}
+
+.tab-btn.active,
+.shop-tab-btn.active {
   border-color: rgba(145, 231, 255, 0.7);
   background: rgba(126, 216, 255, 0.26);
   transform: none;
@@ -458,6 +472,20 @@ button:hover,
 
 .tab-panel.active {
   display: grid;
+}
+
+.shop-tab-panel {
+  display: none;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(7, 15, 30, 0.36);
+  border-radius: 12px;
+  padding: 12px;
+  max-height: min(56vh, 500px);
+  overflow-y: auto;
+}
+
+.shop-tab-panel.active {
+  display: block;
 }
 
 .setting-line {
@@ -486,6 +514,116 @@ button:hover,
   color: #c9d7ee;
   font-size: 0.8rem;
   line-height: 1.4;
+}
+
+.ratio-tip {
+  position: absolute;
+  right: 8px;
+  bottom: -32px;
+  z-index: 12;
+  background: rgba(10, 22, 44, 0.95);
+  border: 1px solid rgba(170, 230, 255, 0.45);
+  color: #dff3ff;
+  font-size: 0.72rem;
+  padding: 5px 8px;
+  border-radius: 8px;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(5px);
+  transition: opacity 0.16s ease, transform 0.16s ease;
+  white-space: nowrap;
+}
+
+.ratio-tip.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.shop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.shop-head h3 {
+  font-size: 0.94rem;
+}
+
+.shop-points {
+  font-size: 0.8rem;
+  color: #cff0ff;
+}
+
+.shop-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+}
+
+.shop-card {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 10px;
+  background: rgba(11, 25, 46, 0.58);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.shop-preview {
+  width: 100%;
+  height: 56px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  position: relative;
+  overflow: hidden;
+}
+
+.shop-preview .preview-paddle {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  width: 16px;
+  height: 40px;
+  border-radius: 4px;
+  transform: translateX(-50%);
+}
+
+.shop-preview .preview-ball {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.shop-card h4 {
+  font-size: 0.82rem;
+  color: #ecf6ff;
+}
+
+.shop-meta {
+  font-size: 0.74rem;
+  color: #cae1ff;
+}
+
+.shop-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.shop-btn-small {
+  padding: 6px 8px;
+  font-size: 0.75rem;
+  border-radius: 8px;
+}
+
+.shop-btn-small[disabled] {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .score-columns {
@@ -689,6 +827,7 @@ body.perf-mode .stat,
 body.perf-mode .board-wrap,
 body.perf-mode .mode-badge,
 body.perf-mode .tab-panel,
+body.perf-mode .shop-tab-panel,
 body.perf-mode .pause-card,
 body.perf-mode .toast,
 body.perf-mode .key-chip,
@@ -698,6 +837,7 @@ body.perf-mode .prism-track,
 body.perf-mode button,
 body.perf-mode .menu-btn,
 body.perf-mode .tab-btn,
+body.perf-mode .shop-tab-btn,
 body.perf-mode .ghost-btn {
   background: #101f3d;
   border-color: #2f496f;
@@ -740,6 +880,7 @@ body.compat-mode .stat,
 body.compat-mode .board-wrap,
 body.compat-mode .mode-badge,
 body.compat-mode .tab-panel,
+body.compat-mode .shop-tab-panel,
 body.compat-mode .pause-card,
 body.compat-mode .toast,
 body.compat-mode .prism-meter,
@@ -747,6 +888,7 @@ body.compat-mode .prism-track,
 body.compat-mode button,
 body.compat-mode .menu-btn,
 body.compat-mode .tab-btn,
+body.compat-mode .shop-tab-btn,
 body.compat-mode .ghost-btn {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;

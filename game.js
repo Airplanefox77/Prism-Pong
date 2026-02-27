@@ -9,6 +9,7 @@
       const missesValue = document.getElementById("missesValue");
       const streakValue = document.getElementById("streakValue");
       const eventValue = document.getElementById("eventValue");
+      const missesRatioTip = document.getElementById("missesRatioTip");
       const resetBtn = document.getElementById("resetBtn");
       const eventToast = document.getElementById("eventToast");
       const modeBadge = document.getElementById("modeBadge");
@@ -19,9 +20,16 @@
       const settingsPanel = document.getElementById("settingsPanel");
       const pauseResumeBtn = document.getElementById("pauseResumeBtn");
       const pauseSettingsBtn = document.getElementById("pauseSettingsBtn");
+      const pauseShopBtn = document.getElementById("pauseShopBtn");
       const pauseRestartBtn = document.getElementById("pauseRestartBtn");
       const closePauseBtn = document.getElementById("closePauseBtn");
       const settingsBackBtn = document.getElementById("settingsBackBtn");
+      const shopPanel = document.getElementById("shopPanel");
+      const shopBackBtn = document.getElementById("shopBackBtn");
+      const shopPointsValue = document.getElementById("shopPointsValue");
+      const shopPaddleGrid = document.getElementById("shopPaddleGrid");
+      const shopBallGrid = document.getElementById("shopBallGrid");
+      const shopThemeGrid = document.getElementById("shopThemeGrid");
 
       const aiDifficulty = document.getElementById("aiDifficulty");
       const aiDifficultyValue = document.getElementById("aiDifficultyValue");
@@ -51,6 +59,8 @@
 
       const tabButtons = Array.from(document.querySelectorAll(".tab-btn"));
       const tabPanels = Array.from(document.querySelectorAll(".tab-panel"));
+      const shopTabButtons = Array.from(document.querySelectorAll(".shop-tab-btn"));
+      const shopTabPanels = Array.from(document.querySelectorAll(".shop-tab-panel"));
 
       const flickKeyMap = {
         p1Down: document.getElementById("keyA"),
@@ -67,10 +77,34 @@
       const PRISM_OVEREXPOSE_MS = 4500;
       const FREEZE_SLOW_FACTOR = 0.25;
       const SCORE_LOG_STORAGE_KEY = "prismPong.scoreLog.v1";
+      const SHOP_STORAGE_KEY = "prismPong.shop.v1";
       const SCORE_LOG_RECENT_TTL_MS = 20 * 60 * 1000;
       const SCORE_LOG_TOP_TTL_MS = 14 * 24 * 60 * 60 * 1000;
       const SCORE_LOG_TOP_MAX = 10;
       const CHEAT_TERMINAL_MAX_LINES = 180;
+
+      const PADDLE_SKINS = [
+        { id: "default", label: "Default Prism", cost: 0, colors: ["#7fcff0", "#4d91be"] },
+        { id: "mint", label: "Mint Flux", cost: 80, colors: ["#9de4c9", "#4da888"] },
+        { id: "ember", label: "Ember Edge", cost: 120, colors: ["#ffb288", "#cc5f48"] },
+        { id: "violet", label: "Violet Arc", cost: 170, colors: ["#d1b1ff", "#8b63d0"] },
+        { id: "gold", label: "Royal Gold", cost: 240, colors: ["#ffe69d", "#b5861c"] },
+        { id: "rainbow", label: "Rainbow Pulse", cost: 350, colors: ["#ff6fb0", "#66d9ff"] }
+      ];
+
+      const BALL_SKINS = [
+        { id: "default", label: "Default Ball", cost: 0, kind: "default", preview: "linear-gradient(135deg, #f3f8ff, #9edcff)" },
+        { id: "ice", label: "Ice Core", cost: 110, kind: "solid", color: "#9edcff", preview: "#9edcff" },
+        { id: "ember", label: "Solar Ember", cost: 160, kind: "linear", colors: ["#ffd59f", "#f1724b"], preview: "linear-gradient(135deg, #ffd59f, #f1724b)" },
+        { id: "void", label: "Void Pearl", cost: 220, kind: "linear", colors: ["#f4dcff", "#7b5df2"], preview: "linear-gradient(135deg, #f4dcff, #7b5df2)" }
+      ];
+
+      const BOARD_THEMES = [
+        { id: "default", label: "Default Arena", cost: 0, pattern: "default", preview: "linear-gradient(135deg, rgba(34,74,122,0.85), rgba(10,20,38,0.9))" },
+        { id: "dotgrid", label: "Dot Grid", cost: 90, pattern: "dotgrid", preview: "radial-gradient(circle, rgba(170,220,255,0.4) 1.2px, transparent 1.2px), linear-gradient(135deg, rgba(34,74,122,0.85), rgba(10,20,38,0.9))", previewSize: "12px 12px, auto" },
+        { id: "squaregrid", label: "Square Grid", cost: 140, pattern: "squaregrid", preview: "linear-gradient(rgba(160,208,255,0.32) 1px, transparent 1px), linear-gradient(90deg, rgba(160,208,255,0.32) 1px, transparent 1px), linear-gradient(135deg, rgba(34,74,122,0.85), rgba(10,20,38,0.9))", previewSize: "14px 14px, 14px 14px, auto" },
+        { id: "anglegrid", label: "Angle Grid", cost: 190, pattern: "anglegrid", preview: "repeating-linear-gradient(135deg, rgba(154,225,255,0.24) 0 2px, transparent 2px 10px), linear-gradient(135deg, rgba(34,74,122,0.85), rgba(10,20,38,0.9))" }
+      ];
 
       const state = {
         width: 960,
@@ -223,6 +257,20 @@
         scoreLog: {
           recent: [],
           top: []
+        },
+        progress: {
+          pointsBank: 0
+        },
+        shop: {
+          ownedPaddleSkins: ["default"],
+          ownedBallSkins: ["default"],
+          ownedThemes: ["default"],
+          equipped: {
+            leftPaddle: "default",
+            rightPaddle: "default",
+            ball: "default",
+            theme: "default"
+          }
         },
         vfx: {
           particles: [],
@@ -517,6 +565,445 @@
         syncHud(performance.now(), true);
       }
 
+      function getPaddleSkin(id) {
+        return PADDLE_SKINS.find((skin) => skin.id === id) || PADDLE_SKINS[0];
+      }
+
+      function getBallSkin(id) {
+        return BALL_SKINS.find((skin) => skin.id === id) || BALL_SKINS[0];
+      }
+
+      function getBoardTheme(id) {
+        return BOARD_THEMES.find((theme) => theme.id === id) || BOARD_THEMES[0];
+      }
+
+      function getSpendablePoints() {
+        return state.progress.pointsBank;
+      }
+
+      function setSpendablePoints(value) {
+        state.progress.pointsBank = Math.max(0, Math.round(value));
+      }
+
+      function awardSpendablePoints(amount) {
+        const safeAmount = Math.max(0, Math.round(amount));
+        if (safeAmount <= 0) {
+          return;
+        }
+        state.progress.pointsBank += safeAmount;
+        saveShopState();
+      }
+
+      function normalizeOwnedIds(rawIds, catalog) {
+        const allowed = new Set(catalog.map((entry) => entry.id));
+        const owned = new Set(["default"]);
+        if (Array.isArray(rawIds)) {
+          for (const id of rawIds) {
+            if (typeof id === "string" && allowed.has(id)) {
+              owned.add(id);
+            }
+          }
+        }
+        return Array.from(owned);
+      }
+
+      function normalizeShopState(raw) {
+        const next = raw && typeof raw === "object" ? raw : {};
+        const ownedPaddleSkins = normalizeOwnedIds(next.ownedPaddleSkins, PADDLE_SKINS);
+        const ownedBallSkins = normalizeOwnedIds(next.ownedBallSkins, BALL_SKINS);
+        const ownedThemes = normalizeOwnedIds(next.ownedThemes, BOARD_THEMES);
+
+        const equippedRaw = next.equipped && typeof next.equipped === "object" ? next.equipped : {};
+        const equipped = {
+          leftPaddle: ownedPaddleSkins.includes(equippedRaw.leftPaddle) ? equippedRaw.leftPaddle : "default",
+          rightPaddle: ownedPaddleSkins.includes(equippedRaw.rightPaddle) ? equippedRaw.rightPaddle : "default",
+          ball: ownedBallSkins.includes(equippedRaw.ball) ? equippedRaw.ball : "default",
+          theme: ownedThemes.includes(equippedRaw.theme) ? equippedRaw.theme : "default"
+        };
+
+        return {
+          ownedPaddleSkins,
+          ownedBallSkins,
+          ownedThemes,
+          equipped
+        };
+      }
+
+      function saveShopState() {
+        try {
+          localStorage.setItem(SHOP_STORAGE_KEY, JSON.stringify({
+            shop: state.shop,
+            pointsBank: state.progress.pointsBank
+          }));
+        } catch (_err) {
+          // ignore storage failures
+        }
+      }
+
+      function loadShopState() {
+        try {
+          const raw = localStorage.getItem(SHOP_STORAGE_KEY);
+          if (!raw) {
+            return;
+          }
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === "object" && (parsed.shop || parsed.pointsBank !== undefined)) {
+            state.shop = normalizeShopState(parsed.shop);
+            const nextBank = Number(parsed.pointsBank);
+            state.progress.pointsBank = Number.isFinite(nextBank) ? Math.max(0, Math.round(nextBank)) : 0;
+            return;
+          }
+          state.shop = normalizeShopState(parsed);
+        } catch (_err) {
+          state.shop = normalizeShopState(null);
+          state.progress.pointsBank = 0;
+        }
+      }
+
+      function activateShopTab(tabId) {
+        for (const btn of shopTabButtons) {
+          const isActive = btn.dataset.shopTabTarget === tabId;
+          btn.classList.toggle("active", isActive);
+          btn.setAttribute("aria-selected", isActive ? "true" : "false");
+        }
+        for (const panel of shopTabPanels) {
+          panel.classList.toggle("active", panel.id === tabId);
+        }
+      }
+
+      function showMissesRatioTip() {
+        if (!missesRatioTip || !state.settings.aiEnabled) {
+          return;
+        }
+        const p1Goals = Math.max(0, state.score.player1);
+        const aiGoals = Math.max(0, state.score.misses);
+        const ratio = aiGoals === 0 ? "Perfect" : (p1Goals / aiGoals).toFixed(2) + "x";
+        missesRatioTip.textContent = "P1 : AI = " + p1Goals + " : " + aiGoals + " (" + ratio + ")";
+        missesRatioTip.classList.add("show");
+        missesRatioTip.setAttribute("aria-hidden", "false");
+      }
+
+      function hideMissesRatioTip() {
+        if (!missesRatioTip) {
+          return;
+        }
+        missesRatioTip.classList.remove("show");
+        missesRatioTip.setAttribute("aria-hidden", "true");
+      }
+
+      function applyPaddleSkinPurchase(id, side) {
+        if (!state.shop.ownedPaddleSkins.includes(id)) {
+          state.shop.ownedPaddleSkins.push(id);
+        }
+        if (side === "left") {
+          state.shop.equipped.leftPaddle = id;
+        } else {
+          state.shop.equipped.rightPaddle = id;
+        }
+      }
+
+      function purchasePaddleSkin(id) {
+        const skin = getPaddleSkin(id);
+        if (!skin || skin.id === "default") {
+          return;
+        }
+
+        const targetAnswer = window.prompt("Give this skin to who? Type p1 or ai (p2 also works).", "p1");
+        if (targetAnswer === null) {
+          return;
+        }
+        const side = parseSideToken(targetAnswer.trim(), null);
+        if (!side) {
+          showToast("Purchase cancelled: choose p1 or ai/p2");
+          return;
+        }
+
+        const points = getSpendablePoints();
+        if (points < skin.cost) {
+          showToast("Not enough points for " + skin.label);
+          return;
+        }
+
+        const whoLabel = side === "left" ? "P1" : (state.settings.aiEnabled ? "AI" : "P2");
+        const confirmed = window.confirm("Spend " + skin.cost + " points to unlock " + skin.label + " for " + whoLabel + "?");
+        if (!confirmed) {
+          return;
+        }
+
+        setSpendablePoints(points - skin.cost);
+        applyPaddleSkinPurchase(skin.id, side);
+        saveShopState();
+        renderShop();
+        markHudDirty();
+        showToast("Unlocked " + skin.label + " for " + whoLabel);
+      }
+
+      function setPaddleSkin(side, id) {
+        if (!state.shop.ownedPaddleSkins.includes(id)) {
+          return;
+        }
+        if (side === "left") {
+          state.shop.equipped.leftPaddle = id;
+        } else {
+          state.shop.equipped.rightPaddle = id;
+        }
+        saveShopState();
+        renderShop();
+      }
+
+      function purchaseBallSkin(id) {
+        const skin = getBallSkin(id);
+        if (!skin || skin.id === "default") {
+          return;
+        }
+        const points = getSpendablePoints();
+        if (points < skin.cost) {
+          showToast("Not enough points for " + skin.label);
+          return;
+        }
+        const confirmed = window.confirm("Spend " + skin.cost + " points to unlock " + skin.label + "?");
+        if (!confirmed) {
+          return;
+        }
+        setSpendablePoints(points - skin.cost);
+        if (!state.shop.ownedBallSkins.includes(skin.id)) {
+          state.shop.ownedBallSkins.push(skin.id);
+        }
+        state.shop.equipped.ball = skin.id;
+        saveShopState();
+        renderShop();
+        markHudDirty();
+        showToast("Unlocked " + skin.label);
+      }
+
+      function setBallSkin(id) {
+        if (!state.shop.ownedBallSkins.includes(id)) {
+          return;
+        }
+        state.shop.equipped.ball = id;
+        saveShopState();
+        renderShop();
+      }
+
+      function purchaseBoardTheme(id) {
+        const theme = getBoardTheme(id);
+        if (!theme || theme.id === "default") {
+          return;
+        }
+        const points = getSpendablePoints();
+        if (points < theme.cost) {
+          showToast("Not enough points for " + theme.label);
+          return;
+        }
+        const confirmed = window.confirm("Spend " + theme.cost + " points to unlock " + theme.label + "?");
+        if (!confirmed) {
+          return;
+        }
+        setSpendablePoints(points - theme.cost);
+        if (!state.shop.ownedThemes.includes(theme.id)) {
+          state.shop.ownedThemes.push(theme.id);
+        }
+        state.shop.equipped.theme = theme.id;
+        saveShopState();
+        renderShop();
+        markHudDirty();
+        showToast("Unlocked " + theme.label);
+      }
+
+      function setBoardTheme(id) {
+        if (!state.shop.ownedThemes.includes(id)) {
+          return;
+        }
+        state.shop.equipped.theme = id;
+        saveShopState();
+        renderShop();
+      }
+
+      function renderShopPaddleCards() {
+        if (!shopPaddleGrid) {
+          return;
+        }
+        shopPaddleGrid.textContent = "";
+        for (const skin of PADDLE_SKINS) {
+          const owned = state.shop.ownedPaddleSkins.includes(skin.id);
+          const leftSelected = state.shop.equipped.leftPaddle === skin.id;
+          const rightSelected = state.shop.equipped.rightPaddle === skin.id;
+
+          const card = document.createElement("article");
+          card.className = "shop-card";
+
+          const preview = document.createElement("div");
+          preview.className = "shop-preview";
+          const previewPaddle = document.createElement("div");
+          previewPaddle.className = "preview-paddle";
+          previewPaddle.style.background = skin.id === "rainbow"
+            ? "linear-gradient(180deg, hsl(12 100% 67%), hsl(112 100% 68%), hsl(208 100% 68%), hsl(292 100% 68%))"
+            : "linear-gradient(180deg, " + skin.colors[0] + ", " + skin.colors[1] + ")";
+          preview.appendChild(previewPaddle);
+
+          const title = document.createElement("h4");
+          title.textContent = skin.label;
+
+          const meta = document.createElement("div");
+          meta.className = "shop-meta";
+          meta.textContent = owned ? "Owned" : ("Cost: " + skin.cost + " points");
+
+          const actions = document.createElement("div");
+          actions.className = "shop-actions";
+
+          if (!owned && skin.cost > 0) {
+            const buyBtn = document.createElement("button");
+            buyBtn.type = "button";
+            buyBtn.className = "shop-btn-small";
+            buyBtn.textContent = "Buy";
+            buyBtn.addEventListener("click", () => {
+              purchasePaddleSkin(skin.id);
+            });
+            actions.appendChild(buyBtn);
+          } else {
+            const leftBtn = document.createElement("button");
+            leftBtn.type = "button";
+            leftBtn.className = "shop-btn-small";
+            leftBtn.textContent = leftSelected ? "P1 Selected" : "Set P1";
+            leftBtn.disabled = leftSelected;
+            leftBtn.addEventListener("click", () => {
+              setPaddleSkin("left", skin.id);
+              showToast("P1 skin set: " + skin.label);
+            });
+
+            const rightBtn = document.createElement("button");
+            rightBtn.type = "button";
+            rightBtn.className = "shop-btn-small";
+            const rightLabel = state.settings.aiEnabled ? "AI" : "P2";
+            rightBtn.textContent = rightSelected ? (rightLabel + " Selected") : ("Set " + rightLabel);
+            rightBtn.disabled = rightSelected;
+            rightBtn.addEventListener("click", () => {
+              setPaddleSkin("right", skin.id);
+              showToast(rightLabel + " skin set: " + skin.label);
+            });
+
+            actions.append(leftBtn, rightBtn);
+          }
+
+          card.append(preview, title, meta, actions);
+          shopPaddleGrid.appendChild(card);
+        }
+      }
+
+      function renderShopBallCards() {
+        if (!shopBallGrid) {
+          return;
+        }
+        shopBallGrid.textContent = "";
+        for (const skin of BALL_SKINS) {
+          const owned = state.shop.ownedBallSkins.includes(skin.id);
+          const selected = state.shop.equipped.ball === skin.id;
+
+          const card = document.createElement("article");
+          card.className = "shop-card";
+          const preview = document.createElement("div");
+          preview.className = "shop-preview";
+          const previewBall = document.createElement("div");
+          previewBall.className = "preview-ball";
+          previewBall.style.background = skin.preview || "#f3f8ff";
+          preview.appendChild(previewBall);
+
+          const title = document.createElement("h4");
+          title.textContent = skin.label;
+
+          const meta = document.createElement("div");
+          meta.className = "shop-meta";
+          meta.textContent = owned ? "Owned" : ("Cost: " + skin.cost + " points");
+
+          const actions = document.createElement("div");
+          actions.className = "shop-actions";
+          const actionBtn = document.createElement("button");
+          actionBtn.type = "button";
+          actionBtn.className = "shop-btn-small";
+
+          if (!owned && skin.cost > 0) {
+            actionBtn.textContent = "Buy";
+            actionBtn.addEventListener("click", () => {
+              purchaseBallSkin(skin.id);
+            });
+          } else {
+            actionBtn.textContent = selected ? "Selected" : "Select";
+            actionBtn.disabled = selected;
+            actionBtn.addEventListener("click", () => {
+              setBallSkin(skin.id);
+              showToast("Ball skin set: " + skin.label);
+            });
+          }
+          actions.appendChild(actionBtn);
+
+          card.append(preview, title, meta, actions);
+          shopBallGrid.appendChild(card);
+        }
+      }
+
+      function renderShopThemeCards() {
+        if (!shopThemeGrid) {
+          return;
+        }
+        shopThemeGrid.textContent = "";
+        for (const theme of BOARD_THEMES) {
+          const owned = state.shop.ownedThemes.includes(theme.id);
+          const selected = state.shop.equipped.theme === theme.id;
+
+          const card = document.createElement("article");
+          card.className = "shop-card";
+          const preview = document.createElement("div");
+          preview.className = "shop-preview";
+          preview.style.background = theme.preview;
+          if (theme.previewSize) {
+            preview.style.backgroundSize = theme.previewSize;
+          }
+
+          const title = document.createElement("h4");
+          title.textContent = theme.label;
+
+          const meta = document.createElement("div");
+          meta.className = "shop-meta";
+          meta.textContent = owned ? "Owned" : ("Cost: " + theme.cost + " points");
+
+          const actions = document.createElement("div");
+          actions.className = "shop-actions";
+          const actionBtn = document.createElement("button");
+          actionBtn.type = "button";
+          actionBtn.className = "shop-btn-small";
+
+          if (!owned && theme.cost > 0) {
+            actionBtn.textContent = "Buy";
+            actionBtn.addEventListener("click", () => {
+              purchaseBoardTheme(theme.id);
+            });
+          } else {
+            actionBtn.textContent = selected ? "Selected" : "Select";
+            actionBtn.disabled = selected;
+            actionBtn.addEventListener("click", () => {
+              setBoardTheme(theme.id);
+              showToast("Arena theme set: " + theme.label);
+            });
+          }
+          actions.appendChild(actionBtn);
+
+          card.append(preview, title, meta, actions);
+          shopThemeGrid.appendChild(card);
+        }
+      }
+
+      function renderShop() {
+        if (!shopPanel) {
+          return;
+        }
+        if (shopPointsValue) {
+          shopPointsValue.textContent = String(getSpendablePoints());
+        }
+        renderShopPaddleCards();
+        renderShopBallCards();
+        renderShopThemeCards();
+      }
+
       function pushCheatTerminalLine(text, isError = false) {
         if (!cheatTerminalLog) {
           return;
@@ -671,6 +1158,8 @@
           const points = Math.max(0, Math.round(nextValue));
           state.score.points = points;
           state.score.player1 = points;
+          setSpendablePoints(points);
+          saveShopState();
           pushCheatTerminalLine("Points set to " + points + ".");
           markHudDirty();
           return;
@@ -2119,7 +2608,7 @@
           nextPointsLabel = "Points";
           nextMissesLabel = "Misses";
           nextStreakLabel = "Streak";
-          nextPointsValue = String(state.score.points);
+          nextPointsValue = String(state.progress.pointsBank);
           nextMissesValue = String(state.score.misses);
           nextStreakValue = String(state.score.streak);
         } else {
@@ -2201,6 +2690,16 @@
         if (cache.eventColor !== nextEventColor) {
           cache.eventColor = nextEventColor;
           eventValue.style.color = nextEventColor;
+        }
+
+        if (shopPointsValue) {
+          shopPointsValue.textContent = String(getSpendablePoints());
+        }
+
+        if (!state.settings.aiEnabled) {
+          hideMissesRatioTip();
+        } else if (missesRatioTip && missesRatioTip.classList.contains("show")) {
+          showMissesRatioTip();
         }
       }
 
@@ -2440,6 +2939,7 @@
         const base = state.events.rainbow ? 2 : 1;
         const gain = scoreWithPrism(base, "left", true);
         state.score.points += gain;
+        awardSpendablePoints(gain);
 
         if (state.events.rainbow && state.score.misses > 0) {
           state.score.misses -= 1;
@@ -3067,6 +3567,7 @@
           if (state.settings.aiEnabled) {
             state.score.points += gain;
             state.score.player1 += 1;
+            awardSpendablePoints(gain);
             showToast("You scored past the AI +" + gain);
           } else {
             state.score.player1 += gain;
@@ -3287,13 +3788,89 @@
         state.vfx.scorePulse = Math.max(0, state.vfx.scorePulse - dt * 1.2);
       }
 
+      function drawBoardPattern(themeId, tier) {
+        if (themeId === "default") {
+          return;
+        }
+
+        ctx.save();
+
+        if (themeId === "dotgrid") {
+          const step = tier >= 1 ? 24 : 14;
+          const size = tier >= 1 ? 1.4 : 2;
+          ctx.fillStyle = tier >= 1 ? "rgba(160, 214, 255, 0.22)" : "rgba(160, 214, 255, 0.28)";
+          for (let y = step * 0.5; y < state.height; y += step) {
+            for (let x = step * 0.5; x < state.width; x += step) {
+              ctx.fillRect(x, y, size, size);
+            }
+          }
+        } else if (themeId === "squaregrid") {
+          const step = tier >= 1 ? 42 : 28;
+          ctx.strokeStyle = tier >= 1 ? "rgba(144, 204, 255, 0.18)" : "rgba(144, 204, 255, 0.24)";
+          ctx.lineWidth = 1;
+          for (let x = 0; x <= state.width; x += step) {
+            ctx.beginPath();
+            ctx.moveTo(x + 0.5, 0);
+            ctx.lineTo(x + 0.5, state.height);
+            ctx.stroke();
+          }
+          for (let y = 0; y <= state.height; y += step) {
+            ctx.beginPath();
+            ctx.moveTo(0, y + 0.5);
+            ctx.lineTo(state.width, y + 0.5);
+            ctx.stroke();
+          }
+        } else if (themeId === "anglegrid") {
+          const step = tier >= 1 ? 64 : 42;
+          ctx.strokeStyle = tier >= 1 ? "rgba(150, 220, 255, 0.14)" : "rgba(150, 220, 255, 0.22)";
+          ctx.lineWidth = 1.1;
+          for (let offset = -state.height; offset < state.width + state.height; offset += step) {
+            ctx.beginPath();
+            ctx.moveTo(offset, 0);
+            ctx.lineTo(offset - state.height, state.height);
+            ctx.stroke();
+          }
+        }
+
+        ctx.restore();
+      }
+
+      function getPaddleColorsForSide(side, tier) {
+        const equippedId = side === "left" ? state.shop.equipped.leftPaddle : state.shop.equipped.rightPaddle;
+        const skin = getPaddleSkin(equippedId);
+
+        if (skin.id === "default") {
+          if (side === "left") {
+            return tier >= 1 ? ["#7fcff0", "#4d91be"] : ["rgba(130, 219, 255, 0.95)", "rgba(72, 160, 224, 0.82)"];
+          }
+          return tier >= 1 ? ["#9de4c9", "#5ba98e"] : ["rgba(189, 255, 229, 0.92)", "rgba(92, 206, 170, 0.82)"];
+        }
+
+        if (skin.id === "rainbow") {
+          const hue = (state.hue + (side === "left" ? 20 : 180)) % 360;
+          if (tier >= 1) {
+            return [hslColor(hue, 88, 66), hslColor((hue + 120) % 360, 88, 52)];
+          }
+          return [hslColor(hue, 100, 72, 0.95), hslColor((hue + 150) % 360, 100, 60, 0.88)];
+        }
+
+        const colorA = skin.colors[0];
+        const colorB = skin.colors[1];
+        if (tier >= 1) {
+          return [colorA, colorB];
+        }
+        return [colorA, colorB];
+      }
+
       function drawBoard() {
         ctx.clearRect(0, 0, state.width, state.height);
 
         const tier = getPerformanceTier();
+        const boardTheme = getBoardTheme(state.shop.equipped.theme);
         if (tier >= 1) {
           ctx.fillStyle = "#0b1831";
           ctx.fillRect(0, 0, state.width, state.height);
+          drawBoardPattern(boardTheme.id, tier);
 
           ctx.strokeStyle = "#3a5278";
           ctx.lineWidth = 2;
@@ -3314,6 +3891,7 @@
         g.addColorStop(1, "rgba(5, 10, 21, 0.95)");
         ctx.fillStyle = g;
         ctx.fillRect(0, 0, state.width, state.height);
+        drawBoardPattern(boardTheme.id, tier);
 
         ctx.save();
         if (state.events.rainbow) {
@@ -3403,6 +3981,7 @@
       function drawBall() {
         const tier = getPerformanceTier();
         const trailStep = tier === 2 ? 3 : tier === 1 ? 2 : 1;
+        const selectedBallSkin = getBallSkin(state.shop.equipped.ball);
 
         for (let i = 0; i < state.ball.trail.length; i += trailStep) {
           const trail = state.ball.trail[i];
@@ -3453,13 +4032,33 @@
         } else if (state.events.freeze) {
           ctx.fillStyle = "#9edcff";
         } else {
-          ctx.fillStyle = "#f3f8ff";
+          if (selectedBallSkin.kind === "solid") {
+            ctx.fillStyle = selectedBallSkin.color;
+          } else if (selectedBallSkin.kind === "linear") {
+            const skinGrad = ctx.createRadialGradient(
+              state.ball.x - 3,
+              state.ball.y - 4,
+              1,
+              state.ball.x,
+              state.ball.y,
+              state.ball.radius + 2
+            );
+            skinGrad.addColorStop(0, selectedBallSkin.colors[0]);
+            skinGrad.addColorStop(1, selectedBallSkin.colors[1]);
+            ctx.fillStyle = skinGrad;
+          } else {
+            ctx.fillStyle = "#f3f8ff";
+          }
         }
 
         if (state.ball.charge.active) {
           ctx.shadowColor = "rgba(255, 208, 96, 0.96)";
         } else if (state.events.rainbow) {
           ctx.shadowColor = hslColor(state.hue % 360, 100, 68);
+        } else if (selectedBallSkin.kind === "solid") {
+          ctx.shadowColor = selectedBallSkin.color;
+        } else if (selectedBallSkin.kind === "linear") {
+          ctx.shadowColor = selectedBallSkin.colors[0];
         } else {
           ctx.shadowColor = "rgba(186, 220, 255, 0.9)";
         }
@@ -3605,14 +4204,12 @@
         }
 
         const tier = getPerformanceTier();
-        const p1ColorA = tier >= 1 ? "#7fcff0" : "rgba(130, 219, 255, 0.95)";
-        const p1ColorB = tier >= 1 ? "#4d91be" : "rgba(72, 160, 224, 0.82)";
-        const p2ColorA = tier >= 1 ? "#9de4c9" : "rgba(189, 255, 229, 0.92)";
-        const p2ColorB = tier >= 1 ? "#5ba98e" : "rgba(92, 206, 170, 0.82)";
+        const p1Colors = getPaddleColorsForSide("left", tier);
+        const p2Colors = getPaddleColorsForSide("right", tier);
 
         drawBoard();
-        drawPaddle(state.player, p1ColorA, p1ColorB);
-        drawPaddle(state.ai, p2ColorA, p2ColorB);
+        drawPaddle(state.player, p1Colors[0], p1Colors[1]);
+        drawPaddle(state.ai, p2Colors[0], p2Colors[1]);
         drawBall();
         drawVfx();
 
@@ -3849,12 +4446,30 @@
           renderScoreLogs();
           pauseMain.style.display = "none";
           settingsPanel.classList.add("active");
+          if (shopPanel) {
+            shopPanel.classList.remove("active");
+          }
           pauseTitle.textContent = "Settings";
           closePauseBtn.textContent = "Resume";
           return;
         }
 
+        if (view === "shop") {
+          renderShop();
+          pauseMain.style.display = "none";
+          settingsPanel.classList.remove("active");
+          if (shopPanel) {
+            shopPanel.classList.add("active");
+          }
+          pauseTitle.textContent = "Shop";
+          closePauseBtn.textContent = "Resume";
+          return;
+        }
+
         settingsPanel.classList.remove("active");
+        if (shopPanel) {
+          shopPanel.classList.remove("active");
+        }
         pauseMain.style.display = "grid";
         pauseTitle.textContent = "Paused";
         closePauseBtn.textContent = "Resume";
@@ -3975,6 +4590,7 @@
         document.body.classList.toggle("perf-mode", state.settings.performanceMode);
         document.body.classList.toggle("ultra-perf", state.settings.ultraPerformanceMode);
         document.body.classList.toggle("compat-mode", state.runtime.compatibility.isSafariLike);
+        renderShop();
       }
 
       function tick(now) {
@@ -4218,9 +4834,21 @@
         setPauseView("settings");
       });
 
+      if (pauseShopBtn) {
+        pauseShopBtn.addEventListener("click", () => {
+          setPauseView("shop");
+        });
+      }
+
       settingsBackBtn.addEventListener("click", () => {
         setPauseView("main");
       });
+
+      if (shopBackBtn) {
+        shopBackBtn.addEventListener("click", () => {
+          setPauseView("main");
+        });
+      }
 
       pauseRestartBtn.addEventListener("click", () => {
         resetMatch();
@@ -4232,6 +4860,22 @@
           activateTab(btn.dataset.tabTarget);
         });
       });
+
+      shopTabButtons.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          activateShopTab(btn.dataset.shopTabTarget);
+        });
+      });
+
+      const missesStat = missesValue ? missesValue.closest(".stat") : null;
+      if (missesStat && missesRatioTip) {
+        missesStat.addEventListener("mouseenter", () => {
+          showMissesRatioTip();
+        });
+        missesStat.addEventListener("mouseleave", () => {
+          hideMissesRatioTip();
+        });
+      }
 
       aiToggle.addEventListener("change", () => {
         state.settings.aiEnabled = aiToggle.checked;
@@ -4350,13 +4994,16 @@
       });
 
       loadScoreLogs();
+      loadShopState();
       renderScoreLogs();
+      renderShop();
       detectCompatibilityProfile();
       ensureCheatTerminal();
       syncSettingsUi();
       resize();
       setGameMode(state.settings.gameMode, false);
       activateTab("graphicsTab");
+      activateShopTab("shopPaddleTab");
       resetMatch();
       requestAnimationFrame(tick);
     })();
