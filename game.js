@@ -6,6 +6,7 @@
       const missesLabel = document.getElementById("missesLabel");
       const streakLabel = document.getElementById("streakLabel");
       const pointsValue = document.getElementById("pointsValue");
+      const pointsHover = document.getElementById("pointsHover");
       const missesValue = document.getElementById("missesValue");
       const streakValue = document.getElementById("streakValue");
       const eventValue = document.getElementById("eventValue");
@@ -67,7 +68,8 @@
         p1Up: document.getElementById("keyD"),
         p1Overexpose: document.getElementById("keyE"),
         p2Up: document.getElementById("keyLeft"),
-        p2Down: document.getElementById("keyRight")
+        p2Down: document.getElementById("keyRight"),
+        p2Overexpose: document.getElementById("keySlash")
       };
 
       const PLAYER_COMBO_WINDOW_MS = 2800;
@@ -78,6 +80,7 @@
       const FREEZE_SLOW_FACTOR = 0.25;
       const SCORE_LOG_STORAGE_KEY = "prismPong.scoreLog.v1";
       const SHOP_STORAGE_KEY = "prismPong.shop.v1";
+      const SETTINGS_STORAGE_KEY = "prismPong.settings.v1";
       const SCORE_LOG_RECENT_TTL_MS = 20 * 60 * 1000;
       const SCORE_LOG_TOP_TTL_MS = 14 * 24 * 60 * 60 * 1000;
       const SCORE_LOG_TOP_MAX = 10;
@@ -136,6 +139,11 @@
           performanceMode: false,
           ultraPerformanceMode: false,
           gameMode: "classic"
+        },
+        device: {
+          scale: "desktop",
+          aiLocked: false,
+          modalOpen: false
         },
         input: {
           p1Up: false,
@@ -337,6 +345,7 @@
             missesLabel: "",
             streakLabel: "",
             pointsValue: "",
+            pointsHover: "",
             missesValue: "",
             streakValue: "",
             modeBadge: "",
@@ -444,6 +453,90 @@
 
       function lerp(start, end, t) {
         return start + (end - start) * t;
+      }
+
+      let settingsSaveTimer = null;
+
+      function scheduleSettingsSave() {
+        if (settingsSaveTimer) {
+          return;
+        }
+        settingsSaveTimer = setTimeout(() => {
+          settingsSaveTimer = null;
+          saveSettings();
+        }, 150);
+      }
+
+      function saveSettings() {
+        try {
+          localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify({
+            aiEnabled: state.settings.aiEnabled,
+            pointerAssist: state.settings.pointerAssist,
+            audioEnabled: state.settings.audioEnabled,
+            masterVolume: clamp(state.settings.masterVolume, 0, 1),
+            musicEnabled: state.settings.musicEnabled,
+            musicVolume: clamp(state.settings.musicVolume, 0, 1),
+            sfxEnabled: state.settings.sfxEnabled,
+            sfxVolume: clamp(state.settings.sfxVolume, 0, 1),
+            autoGraphics: state.settings.autoGraphics,
+            performanceMode: state.settings.performanceMode,
+            ultraPerformanceMode: state.settings.ultraPerformanceMode,
+            gameMode: state.settings.gameMode
+          }));
+        } catch (_err) {
+          // ignore storage failures
+        }
+      }
+
+      function loadSettings() {
+        try {
+          const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+          if (!raw) {
+            return;
+          }
+          const parsed = JSON.parse(raw);
+          if (!parsed || typeof parsed !== "object") {
+            return;
+          }
+          if (typeof parsed.aiEnabled === "boolean" && !state.device.aiLocked) {
+            state.settings.aiEnabled = parsed.aiEnabled;
+          }
+          if (typeof parsed.pointerAssist === "boolean") {
+            state.settings.pointerAssist = parsed.pointerAssist;
+          }
+          if (typeof parsed.audioEnabled === "boolean") {
+            state.settings.audioEnabled = parsed.audioEnabled;
+          }
+          if (Number.isFinite(Number(parsed.masterVolume))) {
+            state.settings.masterVolume = clamp(Number(parsed.masterVolume), 0, 1);
+          }
+          if (typeof parsed.musicEnabled === "boolean") {
+            state.settings.musicEnabled = parsed.musicEnabled;
+          }
+          if (Number.isFinite(Number(parsed.musicVolume))) {
+            state.settings.musicVolume = clamp(Number(parsed.musicVolume), 0, 1);
+          }
+          if (typeof parsed.sfxEnabled === "boolean") {
+            state.settings.sfxEnabled = parsed.sfxEnabled;
+          }
+          if (Number.isFinite(Number(parsed.sfxVolume))) {
+            state.settings.sfxVolume = clamp(Number(parsed.sfxVolume), 0, 1);
+          }
+          if (typeof parsed.autoGraphics === "boolean") {
+            state.settings.autoGraphics = parsed.autoGraphics;
+          }
+          if (typeof parsed.performanceMode === "boolean") {
+            state.settings.performanceMode = parsed.performanceMode;
+          }
+          if (typeof parsed.ultraPerformanceMode === "boolean") {
+            state.settings.ultraPerformanceMode = parsed.ultraPerformanceMode;
+          }
+          if (typeof parsed.gameMode === "string" && GAME_MODES[parsed.gameMode]) {
+            state.settings.gameMode = parsed.gameMode;
+          }
+        } catch (_err) {
+          // ignore storage failures
+        }
       }
 
       function detectCompatibilityProfile() {
@@ -2655,10 +2748,11 @@
           : leftReady
             ? "Ready (E)"
             : Math.round(leftPct) + "%";
+        const rightReadyText = state.settings.aiEnabled ? "Ready" : "Ready (/)";
         const rightText = rightOver
           ? "Overdrive " + Math.ceil(right.overexposeTimer / 1000) + "s"
           : rightReady
-            ? "Ready"
+            ? rightReadyText
             : Math.round(rightPct) + "%";
 
         if (cache.prismLeftText !== leftText) {
@@ -2719,6 +2813,16 @@
         if (cache.pointsValue !== nextPointsValue) {
           cache.pointsValue = nextPointsValue;
           pointsValue.textContent = nextPointsValue;
+        }
+        if (pointsHover) {
+          let nextPointsHover = "Shop Points: " + state.progress.pointsBank;
+          if (!state.settings.aiEnabled) {
+            nextPointsHover += " (shared)";
+          }
+          if (cache.pointsHover !== nextPointsHover) {
+            cache.pointsHover = nextPointsHover;
+            pointsHover.textContent = nextPointsHover;
+          }
         }
         if (cache.missesValue !== nextMissesValue) {
           cache.missesValue = nextMissesValue;
@@ -3016,18 +3120,23 @@
         state.score.streak += 1;
         addPrism(side, state.events.freeze ? 8 : 6, false);
 
-        if (!state.settings.aiEnabled || side !== "left") {
+        const base = state.events.rainbow ? 2 : 1;
+        const gain = scoreWithPrism(base, side, true);
+
+        if (state.settings.aiEnabled) {
+          if (side !== "left") {
+            return;
+          }
+          state.score.points += gain;
+          awardSpendablePoints(gain);
+
+          if (state.events.rainbow && state.score.misses > 0) {
+            state.score.misses -= 1;
+          }
           return;
         }
 
-        const base = state.events.rainbow ? 2 : 1;
-        const gain = scoreWithPrism(base, "left", true);
-        state.score.points += gain;
         awardSpendablePoints(gain);
-
-        if (state.events.rainbow && state.score.misses > 0) {
-          state.score.misses -= 1;
-        }
       }
 
       function respawnBall(direction) {
@@ -4390,7 +4499,7 @@
         const tier = getPerformanceTier();
         const perfAudioScale = tier === 2 ? 0.45 : tier === 1 ? 0.72 : 1;
         const audioOn = state.settings.audioEnabled;
-        const pausedMuffle = state.menuOpen;
+        const pausedMuffle = state.menuOpen || state.device.modalOpen;
 
         const masterTarget = audioOn ? clamp(state.settings.masterVolume * perfAudioScale, 0, 1) : 0;
         const musicTarget = audioOn && state.settings.musicEnabled ? clamp(state.settings.musicVolume, 0, 1) : 0;
@@ -4584,7 +4693,7 @@
         }
 
         const tier = getPerformanceTier();
-        const inPauseMenu = state.menuOpen;
+        const inPauseMenu = state.menuOpen || state.device.modalOpen;
         if (tier === 2 && !inPauseMenu) {
           return;
         }
@@ -4659,7 +4768,7 @@
       }
 
       function openPauseMenu(showSettings = false) {
-        if (state.menuOpen || state.cheats.terminalOpen) {
+        if (state.menuOpen || state.device.modalOpen || state.cheats.terminalOpen) {
           return;
         }
 
@@ -4672,6 +4781,7 @@
         setPauseView(showSettings ? "settings" : "main");
         updateAudioMix();
         showToast("Paused");
+        window.dispatchEvent(new CustomEvent("prism:pause-open"));
       }
 
       function closePauseMenu() {
@@ -4695,6 +4805,74 @@
         updateAudioMix();
         lastFrame = now;
         showToast("Resumed");
+        window.dispatchEvent(new CustomEvent("prism:pause-close"));
+      }
+
+      function setModalPause(open) {
+        if (open) {
+          if (state.device.modalOpen) {
+            return;
+          }
+          state.device.modalOpen = true;
+          if (!state.paused) {
+            state.paused = true;
+            state.pauseStartedAt = performance.now();
+          }
+          updateAudioMix();
+          return;
+        }
+
+        if (!state.device.modalOpen) {
+          return;
+        }
+
+        state.device.modalOpen = false;
+        if (!state.menuOpen) {
+          const now = performance.now();
+          const delta = state.pauseStartedAt ? now - state.pauseStartedAt : 0;
+          shiftTimedSystemsBy(delta);
+          state.paused = false;
+          state.pauseStartedAt = 0;
+          lastFrame = now;
+        }
+        updateAudioMix();
+      }
+
+      function setDeviceScale(scale, options = {}) {
+        const nextScale = (scale === "mobile" || scale === "tablet") ? scale : "desktop";
+        const lockAi = !!options.lockAi;
+        const nextLock = lockAi && nextScale !== "desktop";
+        state.device.scale = nextScale;
+        state.device.aiLocked = nextLock;
+        if (state.device.aiLocked) {
+          state.settings.aiEnabled = true;
+        }
+        syncSettingsUi();
+        scheduleSettingsSave();
+        state.runtime.hudNextSyncAt = 0;
+        syncHud(performance.now(), true);
+        resize();
+      }
+
+      function triggerFlickInput(dirSign) {
+        if (state.cheats.aiVsAi) {
+          return;
+        }
+        const isDown = dirSign > 0;
+        pulseKey(isDown ? "p1Down" : "p1Up");
+        tryFlick("left", dirSign);
+        trackComboInput("left", isDown ? "a" : "d");
+      }
+
+      function triggerOverexposeInput() {
+        pulseKey("p1Overexpose");
+        if (!activateOverexpose("left", true)) {
+          if (state.prism.left.overexposeTimer > 0) {
+            showToast("Overexpose already active");
+          } else {
+            showToast("Fill the prism meter to 100% first");
+          }
+        }
       }
 
       function activateTab(tabId) {
@@ -4752,6 +4930,7 @@
 
       function syncSettingsUi() {
         aiToggle.checked = state.settings.aiEnabled;
+        aiToggle.disabled = state.device.aiLocked;
         manualBlock.classList.toggle("active", !state.settings.aiEnabled);
         autoGraphicsToggle.checked = state.settings.autoGraphics;
         audioToggle.checked = state.settings.audioEnabled;
@@ -4828,6 +5007,7 @@
       function handleGameplayKeydown(event) {
         const key = event.key;
         const lower = key.toLowerCase();
+        const isSlashKey = event.code === "Slash" || key === "/" || key === "?";
 
         if (state.cheats.aiVsAi) {
           return;
@@ -4881,6 +5061,16 @@
           tryFlick("right", 1);
           trackComboInput("right", "a");
         }
+        if (isSlashKey && !state.settings.aiEnabled) {
+          pulseKey("p2Overexpose");
+          if (!activateOverexpose("right", true)) {
+            if (state.prism.right.overexposeTimer > 0) {
+              showToast("Overexpose already active");
+            } else {
+              showToast("Fill the prism meter to 100% first");
+            }
+          }
+        }
       }
 
       function handleGameplayKeyup(event) {
@@ -4909,7 +5099,7 @@
       window.addEventListener("resize", resize);
 
       window.addEventListener("keydown", (event) => {
-        if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Escape", " "].includes(event.key)) {
+        if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Escape", " "].includes(event.key) || event.code === "Slash") {
           event.preventDefault();
         }
 
@@ -4932,6 +5122,10 @@
           return;
         }
 
+        if (state.device.modalOpen) {
+          return;
+        }
+
         if (event.key === "Escape") {
           if (state.menuOpen) {
             closePauseMenu();
@@ -4950,7 +5144,7 @@
           return;
         }
 
-        if (state.menuOpen) {
+        if (state.menuOpen || state.device.modalOpen) {
           return;
         }
 
@@ -4969,7 +5163,7 @@
       });
 
       window.addEventListener("mousemove", (event) => {
-        if (state.menuOpen || state.cheats.terminalOpen || !state.settings.pointerAssist) {
+        if (state.menuOpen || state.device.modalOpen || state.cheats.terminalOpen || !state.settings.pointerAssist) {
           return;
         }
 
@@ -4994,7 +5188,7 @@
 
       canvas.addEventListener("touchstart", (event) => {
         unlockAudio();
-        if (state.menuOpen || state.cheats.terminalOpen || !state.settings.pointerAssist || !event.touches[0]) {
+        if (state.menuOpen || state.device.modalOpen || state.cheats.terminalOpen || !state.settings.pointerAssist || !event.touches[0]) {
           return;
         }
 
@@ -5003,7 +5197,7 @@
       }, { passive: true });
 
       canvas.addEventListener("touchmove", (event) => {
-        if (state.menuOpen || state.cheats.terminalOpen || !state.settings.pointerAssist || !event.touches[0]) {
+        if (state.menuOpen || state.device.modalOpen || state.cheats.terminalOpen || !state.settings.pointerAssist || !event.touches[0]) {
           return;
         }
 
@@ -5070,6 +5264,11 @@
       }
 
       aiToggle.addEventListener("change", () => {
+        if (state.device.aiLocked) {
+          aiToggle.checked = true;
+          showToast("Mobile scaling keeps AI opponent enabled");
+          return;
+        }
         state.settings.aiEnabled = aiToggle.checked;
         if (!state.settings.aiEnabled) {
           state.cheats.aiVsAi = false;
@@ -5085,6 +5284,7 @@
         state.runtime.hudNextSyncAt = 0;
         syncHud(performance.now(), true);
         showToast(state.settings.aiEnabled ? "AI opponent enabled" : "Local 2-player enabled");
+        scheduleSettingsSave();
       });
 
       aiDifficulty.addEventListener("input", () => {
@@ -5094,6 +5294,7 @@
 
       autoGraphicsToggle.addEventListener("change", () => {
         state.settings.autoGraphics = autoGraphicsToggle.checked;
+        scheduleSettingsSave();
         if (!state.settings.autoGraphics) {
           state.runtime.compatibility.autoPerfApplied = false;
           syncSettingsUi();
@@ -5118,6 +5319,7 @@
           state.input.pointerActive = false;
           state.input.pointerY = null;
         }
+        scheduleSettingsSave();
       });
 
       audioToggle.addEventListener("change", () => {
@@ -5129,11 +5331,13 @@
           showToast("Audio muted");
         }
         syncSettingsUi();
+        scheduleSettingsSave();
       });
 
       masterVolume.addEventListener("input", () => {
         state.settings.masterVolume = Number(masterVolume.value);
         updateAudioMix();
+        scheduleSettingsSave();
       });
 
       musicToggle.addEventListener("change", () => {
@@ -5145,11 +5349,13 @@
           showToast("Background music disabled");
         }
         syncSettingsUi();
+        scheduleSettingsSave();
       });
 
       musicVolume.addEventListener("input", () => {
         state.settings.musicVolume = Number(musicVolume.value);
         updateAudioMix();
+        scheduleSettingsSave();
       });
 
       sfxToggle.addEventListener("change", () => {
@@ -5159,29 +5365,53 @@
         }
         syncSettingsUi();
         showToast(state.settings.sfxEnabled ? "Sound effects enabled" : "Sound effects disabled");
+        scheduleSettingsSave();
       });
 
       sfxVolume.addEventListener("input", () => {
         state.settings.sfxVolume = Number(sfxVolume.value);
         updateAudioMix();
+        scheduleSettingsSave();
       });
 
       gameModeSelect.addEventListener("change", () => {
         setGameMode(gameModeSelect.value, true);
+        scheduleSettingsSave();
       });
 
       perfToggle.addEventListener("change", () => {
         state.settings.autoGraphics = false;
         setPerformanceTier(perfToggle.checked ? 1 : 0, false);
         showToast(perfToggle.checked ? "Manual Performance mode enabled" : "Manual Performance mode disabled");
+        scheduleSettingsSave();
       });
 
       ultraPerfToggle.addEventListener("change", () => {
         state.settings.autoGraphics = false;
         setPerformanceTier(ultraPerfToggle.checked ? 2 : 1, false);
         showToast(ultraPerfToggle.checked ? "Manual Ultra Performance enabled" : "Manual Ultra Performance disabled");
+        scheduleSettingsSave();
       });
 
+      window.PrismPong = {
+        apiVersion: 1,
+        openPauseMenu: () => openPauseMenu(false),
+        closePauseMenu,
+        resetMatch,
+        setDeviceScale,
+        setModalPause,
+        triggerFlickUp: () => triggerFlickInput(-1),
+        triggerFlickDown: () => triggerFlickInput(1),
+        triggerOverexpose: () => triggerOverexposeInput()
+      };
+
+      if (window.PrismPongDevice && typeof window.PrismPongDevice.attach === "function") {
+        window.PrismPongDevice.attach(window.PrismPong);
+      }
+
+      window.dispatchEvent(new CustomEvent("prism:ready"));
+
+      loadSettings();
       loadScoreLogs();
       loadShopState();
       renderScoreLogs();

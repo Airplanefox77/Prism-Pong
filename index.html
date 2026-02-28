@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Prism Pong</title>
   <link rel="stylesheet" href="styles.css" />
-  <link rel="icon" href="favicon.png" type="image/png">
+  <link rel="icon" type="image/png" href="favicon.png">
 </head>
 <body>
   <div class="orb orb-1"></div>
@@ -16,6 +16,7 @@
       <article class="stat">
         <span class="label" id="pointsLabel">Points</span>
         <strong class="value" id="pointsValue">0</strong>
+        <span class="hover-tip" id="pointsHover" aria-hidden="true">Shop Points: 0</span>
       </article>
       <article class="stat">
         <span class="label" id="missesLabel">Misses</span>
@@ -36,6 +37,27 @@
       <canvas id="pong" aria-label="Prism Pong Game"></canvas>
 
       <div id="eventToast" class="toast"></div>
+
+      <div id="touchControls" class="touch-controls" aria-hidden="true">
+        <div class="touch-side">
+          <button class="touch-btn" type="button" data-touch-action="flick-up">
+            <span class="touch-icon">UP</span>
+            <span class="touch-label">Flick Up</span>
+          </button>
+          <button class="touch-btn" type="button" data-touch-action="flick-down">
+            <span class="touch-icon">DN</span>
+            <span class="touch-label">Flick Down</span>
+          </button>
+          <button class="touch-btn touch-overexpose" type="button" data-touch-action="overexpose">
+            <span class="touch-icon">EX</span>
+            <span class="touch-label">Overexpose</span>
+          </button>
+        </div>
+        <button class="touch-btn touch-pause" type="button" data-touch-action="pause">
+          <span class="touch-icon">PA</span>
+          <span class="touch-label">Pause</span>
+        </button>
+      </div>
 
       <div id="pauseLayer" class="pause-layer" aria-hidden="true">
         <section class="pause-card" role="dialog" aria-modal="true" aria-labelledby="pauseTitle">
@@ -163,7 +185,7 @@
                 <span>AI Opponent Enabled</span>
                 <input id="aiToggle" class="toggle" type="checkbox" checked />
               </label>
-              <p class="setting-note">Disable AI for local 2-player mode. Player 2 uses Arrow Up/Down + Left/Right flicks and can chain combos with Left/Right sequences.</p>
+              <p class="setting-note">Disable AI for local 2-player mode. Player 2 uses Arrow Up/Down + Left/Right flicks, presses <strong>/</strong> for Overexpose, and can chain combos with Left/Right sequences.</p>
 
               <div id="manualBlock" class="manual-block">
                 <div class="key-grid">
@@ -180,35 +202,87 @@
                     <span id="keyRight" class="key-chip">RIGHT</span>
                     <span>Down smash for player 2</span>
                   </div>
+                  <div class="key-row">
+                    <span id="keySlash" class="key-chip">/</span>
+                    <span>Overexpose for player 2 when prism is full</span>
+                  </div>
                 </div>
               </div>
             </section>
 
             <section class="tab-panel" id="helpTab" role="tabpanel">
               <article class="help-block">
-                <h3>Quick Start</h3>
-                <p>Return the ball to build streak and prism charge. In AI mode you score by beating the right paddle; misses increase when the AI scores on you.</p>
+                <h3>Advanced Quick Start</h3>
+                <p>Every clean return builds streak and prism charge. In AI mode, points come from beating the right paddle; misses climb when the AI scores on you.</p>
+                <ul class="help-list">
+                  <li>Flick shots change ball speed and angle without losing control.</li>
+                  <li>Combos queue for a short window. Chain them for burst pressure.</li>
+                  <li>Overexpose turns your prism into a temporary power play.</li>
+                </ul>
               </article>
               <article class="help-block">
-                <h3>Combos</h3>
-                <p>Input 4-key combos within the combo window to prime special shots:</p>
+                <h3>Combos & Flicks</h3>
+                <p>Use directional flicks to prime 4-key combos before the combo window expires:</p>
                 <div class="key-grid">
-                  <div class="key-row"><span class="key-chip">A D D A</span><span>Prism Zigzag</span></div>
-                  <div class="key-row"><span class="key-chip">A D D D</span><span>Down Burst</span></div>
-                  <div class="key-row"><span class="key-chip">D A A A</span><span>Up Burst</span></div>
+                  <div class="key-row"><span class="key-chip">A D D A</span><span>Prism Zigzag: sharp, flat zigzag drive</span></div>
+                  <div class="key-row"><span class="key-chip">A D D D</span><span>Down Burst: steep, fast downward launch</span></div>
+                  <div class="key-row"><span class="key-chip">D A A A</span><span>Up Burst: steep, fast upward launch</span></div>
+                  <div class="key-row"><span class="key-chip">A D A D</span><span>Curve Up: rising curve with late bend</span></div>
+                  <div class="key-row"><span class="key-chip">D A D A</span><span>Curve Down: falling curve with late bend</span></div>
                 </div>
+                <p>Combo inputs are mirrored for Player 2 flicks. Time them while the ball is near your paddle.</p>
+              </article>
+              <article class="help-block help-desktop">
+                <h3>Desktop Controls</h3>
+                <ul class="help-list">
+                  <li>P1 move: <strong>W / S</strong>, mouse, or touch drag.</li>
+                  <li>P1 flicks: <strong>A</strong> (down) and <strong>D</strong> (up).</li>
+                  <li>Overexpose: <strong>E</strong> when prism is full.</li>
+                  <li>P2 move: <strong>Arrow Up / Down</strong> when AI is off.</li>
+                  <li>P2 flicks: <strong>Arrow Left / Right</strong>; Overexpose with <strong>/</strong>.</li>
+                  <li>Pause: <strong>Esc</strong> or <strong>P</strong>.</li>
+                </ul>
+              </article>
+              <article class="help-block help-touch">
+                <h3>Touch Controls</h3>
+                <ul class="help-list">
+                  <li>Drag on the arena to move the paddle.</li>
+                  <li>Use side buttons for Flick Up, Flick Down, and Overexpose.</li>
+                  <li>Use the bottom Pause button to open the pause menu.</li>
+                  <li>Touch mode keeps the AI opponent enabled.</li>
+                </ul>
               </article>
               <article class="help-block">
-                <h3>Prism Meter</h3>
-                <p>Returns fill your meter. At 100%, press <strong>E</strong> to trigger Overexpose: your shots become much faster and the opponent slows briefly, then your meter resets.</p>
+                <h3>Prism Meter & Overexpose</h3>
+                <p>Returns charge your prism meter. At 100%, trigger Overexpose to supercharge shots and briefly slow your opponent before the meter resets.</p>
               </article>
               <article class="help-block">
-                <h3>Random Events</h3>
-                <p>Large Ball, Rainbow Ball, Freeze Ball, and Sticky Ball can change tempo and scoring. Duel mode disables random events.</p>
+                <h3>Special Events</h3>
+                <ul class="help-list">
+                  <li><strong>Large Ball:</strong> bigger ball plus smaller paddles.</li>
+                  <li><strong>Rainbow Ball:</strong> 2x points and fewer misses on return.</li>
+                  <li><strong>Freeze Ball:</strong> ball speed drops to 25% for the duration.</li>
+                  <li><strong>Sticky Ball:</strong> paddle catches the ball briefly on impact.</li>
+                </ul>
+                <p>Duel mode disables random events.</p>
               </article>
               <article class="help-block">
-                <h3>Pause & Modes</h3>
-                <p>Press <strong>Esc</strong> or <strong>P</strong> to open pause. Use Game Mode in Gameplay to swap between Classic, Chaos, Duel, and Light Survival.</p>
+                <h3>Modes & Scoring</h3>
+                <ul class="help-list">
+                  <li><strong>Classic Prism:</strong> balanced event timing.</li>
+                  <li><strong>Arcade Chaos:</strong> faster event cadence.</li>
+                  <li><strong>Duel Mode:</strong> pure rallies with no random events.</li>
+                  <li><strong>Light Survival:</strong> speed ramps every 10 seconds.</li>
+                </ul>
+                <p>Local 2-player shares a point bank; hover Points to see the total.</p>
+              </article>
+              <article class="help-block">
+                <h3>Advanced Tips</h3>
+                <ul class="help-list">
+                  <li>Flick early to redirect shots before contact.</li>
+                  <li>Curve combos are strongest when the opponent overcommits.</li>
+                  <li>Stack streaks before triggering Overexpose for max tempo.</li>
+                </ul>
               </article>
             </section>
 
@@ -241,6 +315,24 @@
             <button id="shopBackBtn" class="ghost-btn" type="button">Back</button>
           </div>
         </section>
+        <div id="deviceConfirm" class="device-confirm" aria-hidden="true">
+          <div class="device-card" role="dialog" aria-modal="true" aria-labelledby="deviceConfirmTitle">
+            <h3 id="deviceConfirmTitle">Did we guess your device correctly?</h3>
+            <p id="deviceConfirmMessage" class="device-note">We think you're on a mobile device.</p>
+            <div class="device-actions">
+              <button id="deviceConfirmYes" class="menu-btn" type="button">Yes</button>
+              <button id="deviceConfirmNo" class="ghost-btn" type="button">No</button>
+            </div>
+            <div id="deviceConfirmOptions" class="device-options" aria-hidden="true">
+              <p class="device-note">Choose your device for scaling:</p>
+              <div class="device-option-grid">
+                <button class="menu-btn" type="button" data-device-option="mobile">Mobile</button>
+                <button class="menu-btn" type="button" data-device-option="tablet">Tablet</button>
+                <button class="menu-btn" type="button" data-device-option="desktop">Desktop</button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -269,6 +361,26 @@
     </section>
   </main>
 
+  <div id="devicePrompt" class="device-prompt" aria-hidden="true">
+    <div class="device-card" role="dialog" aria-modal="true" aria-labelledby="devicePromptTitle">
+      <button id="devicePromptClose" class="icon-btn" type="button" aria-label="Dismiss device scaling prompt">X</button>
+      <h3 id="devicePromptTitle">Switch to mobile scaling?</h3>
+      <p id="devicePromptMessage" class="device-note">Switch to mobile scaling for better controls and layout.</p>
+      <div class="device-actions">
+        <button id="devicePromptYes" class="menu-btn" type="button">Yes, switch</button>
+        <button id="devicePromptNo" class="ghost-btn" type="button">Not now</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="orientationPrompt" class="orientation-prompt" aria-hidden="true">
+    <div class="orientation-card">
+      <strong>Rotate to landscape</strong>
+      <span>Prism Pong plays best in landscape mode.</span>
+    </div>
+  </div>
+
+  <script src="device.js"></script>
   <script src="game.js"></script>
 </body>
 </html>
