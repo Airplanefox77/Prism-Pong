@@ -78,6 +78,11 @@
       const PRISM_METER_MAX = 100;
       const PRISM_OVEREXPOSE_MS = 4500;
       const FREEZE_SLOW_FACTOR = 0.25;
+      const COMBO_POINT_TABLE = {
+        burst: { hit: 1, deflect: 2 },
+        curve: { hit: 2, deflect: 3 },
+        wave: { hit: 3, deflect: 4 }
+      };
       const SCORE_LOG_STORAGE_KEY = "prismPong.scoreLog.v1";
       const SHOP_STORAGE_KEY = "prismPong.shop.v1";
       const SETTINGS_STORAGE_KEY = "prismPong.settings.v1";
@@ -1815,6 +1820,34 @@
         return Math.max(1, Math.round(baseValue * multiplier));
       }
 
+      function getComboPointKey(typeOrMode) {
+        if (typeOrMode === "curveUp" || typeOrMode === "curveDown") {
+          return "curve";
+        }
+        if (typeOrMode === "burstUp" || typeOrMode === "burstDown") {
+          return "burst";
+        }
+        return typeOrMode;
+      }
+
+      function awardComboPoints(side, typeOrMode, action) {
+        const key = getComboPointKey(typeOrMode);
+        const profile = COMBO_POINT_TABLE[key];
+        if (!profile || !profile[action]) {
+          return;
+        }
+
+        if (state.settings.aiEnabled && side !== "left") {
+          return;
+        }
+
+        const gain = scoreWithPrism(profile[action], side, true);
+        if (state.settings.aiEnabled) {
+          state.score.points += gain;
+        }
+        awardSpendablePoints(gain);
+      }
+
       function queueCombo(side, type, label) {
         const now = performance.now();
         const entry = {
@@ -2591,6 +2624,7 @@
           1.85
         );
 
+        awardComboPoints(side, type, "hit");
         return true;
       }
 
@@ -3668,7 +3702,14 @@
       }
 
       function resolvePaddleBounce(paddle, side) {
+        const deflectedCombo = state.ball.combo.mode && state.ball.combo.owner === getOpponentSide(side)
+          ? state.ball.combo.mode
+          : null;
+
         clearBallCombo();
+        if (deflectedCombo) {
+          awardComboPoints(side, deflectedCombo, "deflect");
+        }
 
         const paddleCenter = paddle.y + paddle.height * 0.5;
         const normalized = clamp((state.ball.y - paddleCenter) / (paddle.height * 0.5), -1, 1);
